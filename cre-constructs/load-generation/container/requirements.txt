@@ -1,0 +1,5 @@
+locust==2.32.4
+requests==2.32.3
+# For /inject handlers and task code that call AWS (SSM, FIS, ...) with the task role. An overlay
+# adds its own packages in requirements-extra.txt; an overlay requirements.txt replaces this file.
+boto3==1.43.118

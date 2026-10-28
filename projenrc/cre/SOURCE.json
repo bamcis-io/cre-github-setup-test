@@ -1,0 +1,7 @@
+{
+  "templateDirName": "cre-demo-template",
+  "templateRemote": "git@ssh.gitlab.aws.dev:aws-cre/resilience-demos/cre-demo-template.git",
+  "templateBranch": "main",
+  "templateSha": "43dfab49d8983590b6532d882831c199613c6c46",
+  "packageVersion": "0.1.0"
+}

@@ -1,0 +1,20 @@
+{
+  "projectType": "CreResilienceDemo",
+  "provider": "github",
+  "project": "cre-github-setup-test",
+  "regions": "us-east-1",
+  "accountId": "392833766185",
+  "ciVariables": [
+    "ASSETS_BUCKET_PREFIX",
+    "AWS_CREDS_TARGET_ROLE",
+    "CFN_EXECUTION_ROLE_ARN"
+  ],
+  "githubRepo": "bamcis-io/cre-github-setup-test",
+  "githubUsername": "hakenmt",
+  "appSlug": "aws-cre-automation-mhaken",
+  "githubVisibility": "private",
+  "secretVariables": [
+    "AWS_CREDS_TARGET_ROLE",
+    "CFN_EXECUTION_ROLE_ARN"
+  ]
+}
