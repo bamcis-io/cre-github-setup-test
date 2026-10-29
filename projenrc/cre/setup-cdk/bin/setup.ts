@@ -7,7 +7,8 @@ import * as names from '../lib/names';
 /**
  * The AWS resources a CRE project needs before its pipeline can deploy, synthesized from context:
  *   npx cdk synth -c project=<name> -c provider=gitlab|github -c home=<control-plane region> \
- *     [-c gitlabNamespace=<group>] [-c githubSubject=repo:<owner>/<repo> [-c githubEnvironment=AWS]] [-c dns=true]
+ *     [-c gitlabNamespace=<group>] [-c githubSubject=repo:<owner>/<repo> [-c githubEnvironment=AWS [-c githubAlsoTrustMain=true]]]
+ *     [-c dns=true]
  * The IAM stack (in the app account, in the control-plane region) and, with dns=true, the DNS stack
  * (in the separate DNS account). Setup deploys them itself with change sets: nothing is
  * bootstrapped. The assets buckets aren't here: the deploy makes each region's the first time a
@@ -33,6 +34,7 @@ new IamStack(app, 'Iam', {
   gitlabNamespace: ctx('gitlabNamespace'),
   githubSubject: ctx('githubSubject'),
   githubEnvironment: ctx('githubEnvironment'),
+  githubAlsoTrustMain: ctx('githubAlsoTrustMain') === 'true',
 });
 if (dns) {
   new DnsStack(app, 'Dns', {
@@ -44,5 +46,6 @@ if (dns) {
     gitlabNamespace: ctx('gitlabNamespace'),
     githubSubject: ctx('githubSubject'),
     githubEnvironment: ctx('githubEnvironment'),
+    githubAlsoTrustMain: ctx('githubAlsoTrustMain') === 'true',
   });
 }

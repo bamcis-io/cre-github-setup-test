@@ -5,5 +5,5 @@
   "description": "CRE construct library, installed from cre-demo-template/constructs/src. Do not edit: change it in cre-demo-template and run `npx projen update-template`.",
   "main": "index.ts",
   "types": "index.ts",
-  "creTemplateSha": "8a50355f4bb081af4deba7ff07180ada29436300"
+  "creTemplateSha": "78a14926a6393b720edf430c438c662ecd5e9ab6"
 }

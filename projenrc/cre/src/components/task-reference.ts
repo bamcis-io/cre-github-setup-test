@@ -126,6 +126,7 @@ export const TASK_REFERENCE: Readonly<Record<string, TaskRef>> = {
       ['--namespace', '(GitLab) set by the task (the group in `repository`); a second value is refused'],
       ['--github-repo', '(GitHub) set by the task (`<owner>/<repo>` from `repository`): the runner role trusts its OIDC subject, read from GitHub (gh\'s login); a second value is refused'],
       ['--github-subject', '(GitHub) the OIDC subject prefix itself, instead of --github-repo (template setup); not with this task'],
+      ['--github-also-trust-main', '(GitHub) with --github-environment, main\'s subject too: only while setup:github-public switches the repo (it narrows the trust again)'],
       ['--github-environment', '(GitHub) set by the task for a public repo (`AWS`): the runner role trusts that environment\'s jobs instead of main\'s; a second value is refused'],
     ],
     script: ['cresetup/account.py'],
@@ -177,7 +178,7 @@ export const TASK_REFERENCE: Readonly<Record<string, TaskRef>> = {
       ['--partition', 'set by the task (.projenrc.ts `partition`, default aws); a second value is refused'],
     ],
     script: ['cresetup/github_public.py'],
-    notes: 'From main with nothing uncommitted. Makes the repo public: running it is the decision, so it doesn\'t ask. Only when the user asks (show them `--dry-run` first). Refused (10) when the history holds something shaped like a credential. Between moving the trust and merging its PR, main\'s old workflow can\'t deploy. Repo-level variables and secrets it didn\'t set are named: set each again with setup:repo. Re-running carries on where it stopped (.git/cre-github-public.json). Exit 0 | 10 refused | 11 credentials | 20 a call failed.',
+    notes: 'From main with nothing uncommitted. Makes the repo public: running it is the decision, so it doesn\'t ask. Only when the user asks (show them `--dry-run` first). Refused (10) when the history holds something shaped like a credential. The trust takes main\'s subject as well as the environment\'s until the switch has merged and main\'s earlier deploys have finished, so main keeps deploying throughout. Repo-level variables and secrets it didn\'t set are named: one the workflows read is moved with setup:repo (give the value again), one nothing reads is a leftover to delete. Re-running carries on where it stopped (.git/cre-github-public.json). Exit 0 | 10 refused | 11 credentials | 20 a call failed.',
   },
   'cfs:curl': {
     usage: 'npx projen cfs:curl [--json] [-i] <GET|POST|PUT|PATCH|DELETE|HEAD> <url-or-/path> [body]',

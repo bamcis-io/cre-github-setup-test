@@ -56,6 +56,8 @@ def synth(a, home, out, run=proc.run):
         ctx["githubSubject"] = a.github_subject
     if a.github_environment:
         ctx["githubEnvironment"] = a.github_environment
+    if a.github_also_trust_main:
+        ctx["githubAlsoTrustMain"] = "true"
     if a.dns_profile:
         ctx["dns"] = "true"
     # --no-install: the package's pinned CDK CLI, never one npx would fetch.
@@ -143,11 +145,15 @@ def parse(argv):
                     help="<owner>/<repo>: read its OIDC subject prefix from GitHub (gh's login) instead of --github-subject")
     ap.add_argument("--github-environment", default="", action=SingleValue,
                     help="GitHub: the deploy jobs' environment (a public repo's AWS); its subject is trusted instead of main's")
+    ap.add_argument("--github-also-trust-main", action="store_true",
+                    help="with --github-environment: main's subject too, while a repo switches to the environment (github_public.py)")
     ap.add_argument("--dns-profile", default="", action=SingleValue, help="the separate DNS account where the project's hosted zones are")
     ap.add_argument("--allow-production", action="append", default=[], metavar="ACCOUNT")
     a = ap.parse_args(argv)
     if a.github_subject and a.github_repo:
         ap.error("--github-subject or --github-repo, not both")
+    if a.github_also_trust_main and not a.github_environment:
+        ap.error("--github-also-trust-main needs --github-environment")
     return a   # the rest of the input is checked by the CDK app at synth, before anything changes
 
 

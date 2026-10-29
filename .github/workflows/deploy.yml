@@ -47,7 +47,7 @@ jobs:
         with:
           name: demo-content
           path: dist/content.zip
-          retention-days: 1
+          retention-days: 7
           if-no-files-found: error
   deploy-upload:
     needs: build
@@ -55,8 +55,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    environment:
-      name: AWS
     env:
       CI: "true"
       PROJECT_NAME: cre-github-setup-test
@@ -104,8 +102,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    environment:
-      name: AWS
     env:
       CI: "true"
       PROJECT_NAME: cre-github-setup-test
