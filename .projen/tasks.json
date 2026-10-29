@@ -343,7 +343,7 @@
       "description": "The CI runner role and the CloudFormation execution role in the deploy account, and with --dns-profile the DNS roles in the hosted zone's account, as CloudFormation stacks (idempotent: an unchanged stack is a no-op).",
       "steps": [
         {
-          "exec": "python3 projenrc/cre/scripts/cresetup/account.py '--project' 'cre-github-setup-test' '--provider' 'github' '--partition' 'aws' '--github-repo' 'bamcis-io/cre-github-setup-test' \"$@\"",
+          "exec": "python3 projenrc/cre/scripts/cresetup/account.py '--project' 'cre-github-setup-test' '--provider' 'github' '--partition' 'aws' '--github-repo' 'bamcis-io/cre-github-setup-test' '--github-environment' 'AWS' \"$@\"",
           "receiveArgs": true
         }
       ]
@@ -379,7 +379,7 @@
           "exec": "python3 projenrc/cre/scripts/cresetup/github.py protect '--repo' 'bamcis-io/cre-github-setup-test'"
         },
         {
-          "exec": "python3 projenrc/cre/scripts/cresetup/github.py variables '--repo' 'bamcis-io/cre-github-setup-test' \"$@\"",
+          "exec": "python3 projenrc/cre/scripts/cresetup/github.py variables '--repo' 'bamcis-io/cre-github-setup-test' '--environment' 'AWS' \"$@\"",
           "receiveArgs": true
         }
       ]

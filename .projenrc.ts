@@ -7,7 +7,7 @@ const project = new CreResilienceDemo({
   name: 'cre-github-setup-test',
   description: 'Setup rewrite test: cre-github-setup-test',
   repository: 'https://github.com/bamcis-io/cre-github-setup-test',
-  github: { visibility: 'private', username: 'hakenmt', awsRegion: 'us-east-1', appSlug: 'aws-cre-automation-mhaken' },
+  github: { visibility: 'public', username: 'hakenmt', awsRegion: 'us-east-1', appSlug: 'aws-cre-automation-mhaken' },
 
   // The stacks, and the pipeline that deploys them, come from the CDK app: every top-level stack is
   // a CreStack with its region, and every parameter the pipeline passes is a CreCfnParameter.
