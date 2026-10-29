@@ -61,7 +61,7 @@ EXEC_ROLE = "CreCfnExecution"
 # Names the deploy sets itself (stack-jobs.ts RESERVED_VARIABLES; a jest test keeps them equal).
 # A project CI/CD variable outranks a GitLab job's own variables, so one of these would silently
 # replace the generated value. STACK_* names carry earlier stacks' outputs and are reserved too.
-RESERVED_VARS = ("STACK_NAME TEMPLATE_NAME AWS_REGION AWS_DEFAULT_REGION ASSETS_BUCKET OUTPUTS_PREFIX "
+RESERVED_VARS = ("STACK_NAME TEMPLATE_NAME AWS_REGION ASSETS_BUCKET OUTPUTS_PREFIX "
                  "OUTPUTS ROLE_ARN ASSUME_ROLE STACK_PARAMETERS REQUIRED_VARS REQUIRED_OUTPUTS "
                  "ASSETS_PREFIX PROJECT_NAME CRE_ROLE_ASSUMED").split()
 RESERVED_PREFIX = "STACK_"
@@ -455,8 +455,10 @@ MIRROR_EXCLUDES = ("__pycache__", ".pytest_cache", "*.pyc", ".DS_Store", "Thumbs
 # removed from one that has an old copy, so no agent takes them for project tools (review 10d G7).
 # update-template.sh is the shim an old project's vendored copy runs FROM THE TEMPLATE CLONE; a
 # project never runs its own (review 10g G6).
-# cresetup/ is the setup rewrite, run from the template clone only until projects switch to it.
-TEMPLATE_ONLY_SCRIPTS = ("setup/new_project.py", "template/update-template.sh", "cresetup")
+# cresetup/scaffold.py, clone.py and build.py make or adopt a project from the template clone (the
+# scaffold needs its skeleton/); the rest of cresetup/ is what a project's setup tasks run.
+TEMPLATE_ONLY_SCRIPTS = ("setup/new_project.py", "template/update-template.sh",
+                        "cresetup/scaffold.py", "cresetup/clone.py", "cresetup/build.py")
 
 
 def drop_template_only(scripts_dir):
@@ -986,17 +988,10 @@ def check_inline_size(step, aws, role, name, doc):
         step.warn(f"{role}'s inline policies are {total} of {INLINE_POLICY_LIMIT} characters: a few more projects and IAM refuses them.")
 
 
-# Known credential formats: the git tasks scan every staged file for them (cregit.SECRET_CONTENT), and
-# setup:github-public scans the whole history with `git log -G` before a repo goes public. One
-# string for both, POSIX-ERE-safe (no \d, no lookarounds) for git (review 10b C11).
-SECRET_CONTENT_PATTERN = (r"AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|glpat-[A-Za-z0-9_-]{20}|"
-                          r"gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|npm_[A-Za-z0-9]{36}|"
-                          r"_authToken *= *[^ $]|aws_secret_access_key *= *[A-Za-z0-9/+]{40}|"
-                          # The environment-variable spelling (.envrc, a shell script, CI vars), quoted or not (review 10d B13).
-                          r"AWS_SECRET_ACCESS_KEY *[=:] *[\"']?[A-Za-z0-9/+]{40}|"
-                          # A Netscape cookie-file row (a Midway cookie is one: a live session), with
-                          # literal tabs, as both Python and git's ERE read them.
-                          "[A-Za-z0-9._-]+\t(TRUE|FALSE)\t/[^\t]*\t(TRUE|FALSE)\t[0-9]+\t")
+# Known credential formats (cregit.SECRET_CONTENT): one copy, in cresetup/ beside setup:github-public's scan.
+# Appended, never first: setup/github_app.py and cresetup/github_app.py share a name.
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cresetup"))
+from credential_pattern import SECRET_CONTENT_PATTERN  # noqa: E402,F401
 
 # The CloudFront Signer bindle a project uses unless it names its own (aws-cre). The same value as
 # DEFAULT_BINDLE_ID in src/components/deploy-tasks.ts (a test keeps them equal).

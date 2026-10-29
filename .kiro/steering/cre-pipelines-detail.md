@@ -1,7 +1,7 @@
 ---
 inclusion: auto
 name: cre-pipelines-detail
-description: Stack placement by region and partition, the deploy variables on GitLab and GitHub (names, protected and masked values, reserved names), the generated deploy jobs, npx projen deploy run locally, and the setup tasks (setup:aws, setup:dns, setup:repo) with their switches. Read when a stack must go in a specific region, when adding or debugging a deploy variable or role, when a deploy job fails, or before running a setup task.
+description: Stack placement by region and partition, the deploy variables on GitLab and GitHub (names, protected and masked values, reserved names), the generated deploy jobs, npx projen deploy run locally, and the setup tasks (setup:aws, setup:repo) with their switches. Read when a stack must go in a specific region, when adding or debugging a deploy variable or role, when a deploy job fails, or before running a setup task.
 ---
 # CI/CD in detail: placement, variables, deploy jobs
 
@@ -32,8 +32,9 @@ deploy time. A CloudFront distribution can't use a VPC origin in another partiti
 Every variable the deploy reads is named by a stack (`fromVariable` parameters and roles, plus
 `CFN_EXECUTION_ROLE_ARN` when a stack uses the default execution role). `cre-stacks.json` lists them
 under `environment` (`required`, `optional`, and `defaulted`: those the deploy has a value for when
-unset, `BINDLE_ID`); the deploy also always needs `ASSETS_BUCKET_PREFIX`, and fails fast on an
-empty required variable.
+unset, `BINDLE_ID`), and fails fast on an empty required variable. The assets buckets need none: each
+region's is named from the project, the account and the region (`<name>-<account>-<region>-an`), and
+the deploy's upload makes it, as a `<project>-cre-assets` stack, the first time a stack goes there.
 
 - **The same names on both providers.** The pipeline's own deploy role is `AWS_CREDS_TARGET_ROLE`
   everywhere (GitLab's credential vendor assumes it; on GitHub the OIDC credentials step does), and
@@ -50,7 +51,7 @@ empty required variable.
   `STACK_*` (the names outputs travel under).
 - **GitHub:** each stack job's `env` is generated with the variables that stack uses, each read as
   `vars.X || secrets.X`: a repository variable for a plain value (shown in logs), a secret for a
-  role ARN or anything hidden. Set them with `setup:repo prepare --var X=…` / `--secret X=…`; don't
+  role ARN or anything hidden. Set them with `setup:repo --var X=…` / `--secret X=…`; don't
   edit the workflow.
 
 ## The deploy jobs
@@ -63,7 +64,7 @@ output, naming it: give the output another value (encode it, or pass the parts s
   `dependsOn`), otherwise in the order the app creates them. Stacks that need nothing from each
   other deploy in parallel in CI. A cycle fails `npx projen`.
 - **Every stack job has the same variables, built into the pipeline**, and `deploy:stack`
-  resolves nothing: `STACK_NAME`, `TEMPLATE_NAME`, `AWS_REGION`, `AWS_DEFAULT_REGION`,
+  resolves nothing: `STACK_NAME`, `TEMPLATE_NAME`, `AWS_REGION`,
   `ASSETS_BUCKET`, `OUTPUTS_PREFIX`, `OUTPUTS`, `ROLE_ARN`, `ASSUME_ROLE`, `STACK_PARAMETERS`,
   `REQUIRED_VARS`, `REQUIRED_OUTPUTS`. `STACK_PARAMETERS` references the deploy variables and the
   earlier stacks' outputs directly. `cre-stacks.json` records every job's needs and variables.
@@ -75,7 +76,7 @@ output, naming it: give the output another value (encode it, or pass the parts s
   stops it, naming the variable, or the stack and output.
 - **Roles:** every job runs as `AWS_CREDS_TARGET_ROLE`. A stack with an `assumeRole` assumes it
   from those credentials first (role chaining), so the other account's role trusts the runner role,
-  which `setup:dns` sets up.
+  which `setup:aws --dns-profile <p>` sets up.
 - **Serialised, never cancelled mid-CloudFormation.** GitLab: each stack job is serialised across
   pipelines (`resource_group`), so the stacks of one pipeline still deploy in parallel. GitHub: one
   deploy run at a time (one workflow `concurrency` group); a run still waiting when a newer merge
@@ -91,19 +92,25 @@ deployed stacks. The identity differs from CI's (yours, not the runner role's): 
 `assumeRole` trusts only the runner role (a cross-account `CreDnsStack`) is refused before anything
 deploys; let CI deploy it.
 
-**A DNS zone added after the scaffold.** `npx projen setup:dns` makes the zone's roles and records
-the zone in `cre-setup.json`, but sets no CI/CD variables: it prints the one `setup:repo prepare`
-command for `DOMAIN`, `HOSTED_ZONE_ID` and, for a zone in another account, `DNS_ROLE_ARN` and
-`DNS_CFN_EXECUTION_ROLE_ARN`. Run it with the user's agreement. Until then the build fails for a
+**A DNS zone added after the scaffold.** The zone itself is the user's (an existing public hosted
+zone). In the deploy account nothing needs setting up. In another account, `npx projen setup:aws
+--dns-profile <that account's profile>` deploys the stack `CreSetupDns-<project>` there and prints
+`DNS_ROLE_ARN` and `DNS_CFN_EXECUTION_ROLE_ARN`. Neither sets CI/CD variables: set `DOMAIN`,
+`HOSTED_ZONE_ID` and, for a zone in another account, those two role ARNs with `setup:repo`.
+Run them with the user's agreement. Until then the build fails for a
 zone in another account (the roles are optional in the plan, but without them the DNS stack would
 deploy into this account).
 
-The `setup:repo prepare` switch `check:deploy-prereqs` prints, by kind of value:
+The `setup:repo` switch for each kind of value:
 
 | | Plain value | Role ARN | `noEcho` parameter's value |
 |---|---|---|---|
-| GitLab | `--var X=v` | `--var X=arn:…:protected` | `--var X=@<file holding it>:protected:masked` |
-| GitHub | `--var X=v` (repository variable) | `--secret X=arn:…` | `--secret X=@<file holding it>` |
+| GitLab | `--deploy-var X=v` | `--deploy-var X=arn:…` | `--deploy-var X=@<file holding it>` |
+| GitHub | `--var X=v` (Actions variable) | `--secret X=arn:…` | `--secret X=@<file holding it>` |
+
+A variable that feeds a `noEcho` parameter is stored hidden (masked on GitLab, a secret on GitHub)
+whichever switch sets it: `setup:repo` reads which ones from `cre-stacks.json` and `cdk.out/`, and
+refuses (10) until `npx projen` has made them.
 
 A `noEcho` value is read from the file (`@<file>`, one trailing newline dropped) so it is never on
 the command line, in `ps` or in the shell history. Write it to a file the user chooses, and delete
@@ -116,73 +123,31 @@ account, the DNS zone or the repository: ask the user first.
 
 ### `setup:aws`
 
-`npx projen setup:aws [--profile <p>] [--regions "<r1> <r2>"] [--runner-role <name>] [--exec-role <name>] [--allow-production[=<account>]] [--update-runner-trust-policy[=<role>@<account>]] [--force] [--discovery] [--dry-run]`
+`npx projen setup:aws [--profile <p>] [--dns-profile <p>] [--allow-production <account>]...`
 
-Assets buckets, CloudFormation execution role and CI runner role in the target account (idempotent).
+The CI runner role and the CloudFormation execution role in the deploy account, and with --dns-profile the DNS roles in the hosted zone's account, as CloudFormation stacks (idempotent: an unchanged stack is a no-op).
 
 - `--profile`: the deploy account's AWS profile
-- `--project`: the project name (default: cre-setup.json)
-- `--regions`: the regions to make assets buckets in (default: cre-setup.json and every region in cre-stacks.json; the partition's control-plane region always, us-east-1 in `aws`)
-- `--provider`: gitlab or github (default: cre-setup.json)
-- `--github-repo`: (GitHub) owner/repo the runner role trusts (default: cre-setup.json)
-- `--runner-role`: the CI runner role name (default GitLabRunner / CreGitHubDeploy)
-- `--exec-role`: the CloudFormation execution role name (default CreCfnExecution)
-- `--move-account`: set up an account other than cre-setup.json's accountId (refused without it), and record it. Delete the old account's assets buckets first: S3 names are global
-- `--allow-production`: set up in a production account (Isengard IsProduction, or an account it can't classify); `=<account>` approves only that one. Refused (10) without it. Only after the user agrees
-- `--update-runner-trust-policy`: add this project to an existing runner role's trust policy, which other projects share (the diff is printed); `=<role>@<account>` approves only that role. Refused (10) without it. Only after the user agrees
-- `--force`: make every decision this task takes (the switches above), for any subject; only after the user agrees to each
-- `--discovery`: change nothing: print one `DECISION=<json>` line per decision the run needs (field, switch, what, change, and `approve`: the subject to pass as `<switch>=<approve>`), and one `CHECK=<json>` line per safety check, a change or not (`status`: change, in-place, create or not-needed), read from the accounts as they are now
-- `--dry-run`: print the plan, change nothing
+- `--dns-profile`: the profile of the separate account the project's hosted zones are in: that account gets the stack CreSetupDns-<project> (the roles the DNS stack deploys and validates certificates with). Leave it out when the zone is in the deploy account
+- `--allow-production`: set up an account Isengard calls production, or can't classify (repeat for the DNS account). Refused (10) without it, before anything changes. Only after the user agrees
+- `--project`: set by the task (.projenrc.ts `name`); a second value is refused
+- `--provider`: set by the task (the project's provider); a second value is refused
+- `--partition`: set by the task (.projenrc.ts `partition`, default aws); a second value is refused
+- `--github-repo`: (GitHub) set by the task (`<owner>/<repo>` from `repository`): the runner role trusts its OIDC subject, read from GitHub (gh's login); a second value is refused
+- `--github-subject`: (GitHub) the OIDC subject prefix itself, instead of --github-repo (template setup); not with this task
+- `--github-environment`: (GitHub) set by the task for a public repo (`AWS`): the runner role trusts that environment's jobs instead of main's; a second value is refused
 
-Assets buckets, the execution role, the CI runner role (idempotent). A runner role setup created keeps its `cre-runner` policy's grants and only gains this project's (shared by every project); put extra permissions in a policy of their own. Ask the user first.
-
-### `setup:dns`
-
-`npx projen setup:dns [--zone-id <Z...> | --supernova people --alias <a> | --supernova cre --zone-name <n>] [--domain <fqdn>] [--dns-profile <p>] [--allow-production[=<account>]] [--update-dns-role-trust-policy[=CreDnsDeploy@<account>]] [--force] [--discovery] [--dry-run]`
-
-External DNS: check the zone, or create the cross-account DNS roles / SuperNova prerequisites.
-
-- `--profile`: the deploy account's profile
-- `--dns-profile`: the zone account's profile, when the zone is in another account
-- `--project`: the project (default: cre-setup.json)
-- `--regions`: regions that get certificate-validator trust (default: cre-setup.json)
-- `--domain`: the project's domain (default <project>.<zone>)
-- `--zone-id`: an existing hosted zone
-- `--supernova`: no zone yet: `people` or `cre`; creates the zone and the SuperNova role (exit 13 until delegation completes)
-- `--alias`: with `--supernova people`: your alias
-- `--zone-name`: with `--supernova cre`: the zone name
-- `--runner-role`: the CI runner role (default: the provider's)
-- `--move-account`: the deploy account isn't cre-setup.json's accountId on purpose (refused without it)
-- `--provider`: gitlab or github
-- `--bindle`: with `--supernova`: the bindle named in the SuperNova request text (default: cre-setup.json's bindleId, else $BINDLE_ID, else the aws-cre bindle)
-- `--allow-production`: set up in a production account (Isengard IsProduction, or an account it can't classify); `=<account>` approves only that one. Refused (10) without it. Only after the user agrees
-- `--update-dns-role-trust-policy`: add this project's runner role to the existing CreDnsDeploy role's trust policy in the DNS account, which other projects share (the diff is printed); `=CreDnsDeploy@<account>` approves only that one. Refused (10) without it. Only after the user agrees
-- `--force`: make every decision this task takes (the switches above), for any subject; only after the user agrees to each
-- `--discovery`: change nothing: print one `DECISION=<json>` line per decision the run needs (field, switch, what, change, and `approve`: the subject to pass as `<switch>=<approve>`), and one `CHECK=<json>` line per safety check, a change or not (`status`: change, in-place, create or not-needed), read from the accounts as they are now
-- `--dry-run`: print the plan, change nothing
-
-Never deletes a hosted zone. Ask the user first.
+Deploys CreSetup-<project> (the runner role GitLabRunner-<project> or GitHubRunner-<project>, and the shared CreCfnExecution) in the partition's control-plane region with a change set; an unchanged stack is a no-op, so a re-run takes seconds. Prints ACCOUNT_ID, RUNNER_ROLE_ARN, CFN_EXECUTION_ROLE_ARN (and DNS_ACCOUNT_ID, DNS_ROLE_ARN, DNS_CFN_EXECUTION_ROLE_ARN): `setup:repo` puts them in the CI variables. No buckets: the deploy makes each region's. Exit 0 | 10 refused, nothing changed | 11 credentials or Midway | 20 a call failed (a re-run continues). Ask the user first.
 
 ### `setup:repo`
 
-`npx projen setup:repo prepare|finalize [--var KEY=VALUE]... [--secret KEY=VALUE]... [--repo <owner/name>] [--app-slug <s>]`
+`npx projen setup:repo [--var KEY=VALUE]... [--secret KEY=VALUE]...`
 
-Create/adopt the GitHub repo and set CI variables (prepare | finalize).
+Re-apply the GitHub repo's settings and set the CI/CD variables given (idempotent: only what differs changes). A variable that feeds a noEcho parameter is stored hidden.
 
-- `--var`: (GitHub) a repository variable (plain values; hidden ones are `--secret`). `KEY=@<file>` reads the value from a file, `KEY` alone from the environment
-- `--secret`: (GitHub) an Actions secret (role ARNs, anything hidden); `KEY=@<file>` / `KEY` as for --var
-- `--repo`: (GitHub) owner/repo (default: cre-setup.json)
-- `--app-slug`: (GitHub) your automation App (default: cre-setup.json)
-- `--app-id`: (GitHub) the App id (default: looked up from the slug)
-- `--app-key-file`: (GitHub) the App's private key (default ~/.cre/<slug>.pem)
-- `--wait-install`: (GitHub) wait up to N seconds for the App to be installed
-- `--dir`: the project directory (default: here): `finalize` pushes it; `prepare` reads its history to check the repo is this project's
-- `--no-create`: prepare: refuse (10) when the repo doesn't exist, instead of creating it. The default once this clone has pushed (new_project.py passes it too)
-- `--recreate`: prepare: create the repo even though this clone pushed to it before (it was deleted since). Without it prepare refuses (10) once the clone has pushed, so a retired project never comes back by a routine re-run. Ask the user first
-- `--message`: `finalize`: the first commit's message
-- `--adopt-existing-repo`: `prepare`: set up a repo whose history setup didn't make (work started before the template): it gets the CI variables and role trust. `=<group/project>` or `=<owner/repo>` for only that one. Refused (10) without it. Only after the user agrees. The adoption itself (the scaffold into its main, through an MR/PR) is `new_project.py`'s (/cre-demo-init); `finalize` pushes only into an empty repo
-- `--force`: `prepare`: make the decision above; only after the user agrees
-- `--discovery`: `prepare`: change nothing; print a `DECISION=<json>` line when the repo has history to adopt (what it holds is the `change`)
-- `--dry-run`: print the plan, change nothing
+- `--var`: (GitHub) an Actions variable (shown in logs), in the `AWS` environment for a public repo. `KEY=@<file>` reads the value from a file
+- `--secret`: (GitHub) an Actions secret (role ARNs, anything hidden), in the `AWS` environment for a public repo. `KEY=@<file>` as for --var
+- `--repo`: (GitHub) set by the task (`<owner>/<repo>` from `repository`); a second value is refused
+- `--environment`: (GitHub) set by the task for a public repo (`AWS`); a second value is refused
 
-prepare: create or adopt the repo, set variables. finalize: the first push into an empty repo (one with commits: 10), protect main, and on GitLab the weekly upgrade's token and schedule (13 with NEEDS=UPGRADE_TOKEN when GitLab refuses project access tokens; everything else is done). Ask the user first.
+Idempotent: re-applies the repo's settings (main's protection, merge settings; GitLab the weekly upgrade token and schedule; GitHub the App and, when public, the `AWS` environment) and writes only the variables that differ. A missing repo is refused, never created. A variable that feeds a `noEcho` stack parameter is stored hidden (masked on GitLab, a secret on GitHub) whichever switch set it, read from `cre-stacks.json` and `cdk.out/` (refused, 10, until `npx projen` has made them). GitLab refuses to mask some values (10, with its message). Exit 0 | 10 refused | 11 credentials or Midway | 20 a call failed (a re-run continues). Ask the user first.

@@ -6,48 +6,20 @@ import * as cxapi from 'aws-cdk-lib/cx-api';
 import { Construct } from 'constructs';
 import { REGION_NAME, unknownRegion } from './names.js';
 
-/** The ECR repository a project's container images go to, in each region it deploys to. Never
- * CDK's shared bootstrap repository: the project's runner role may push only here. */
-export function creImageRepository(project: string): string {
-  return `cre/${project}`;
-}
-
 /**
  * The synthesizer every CRE stack uses. The deploy publishes each template and its assets to
  * `s3://<AssetsBucketName>/<AssetsBucketPrefix>` and CloudFormation reads them from there, so the
  * `${AssetsBucketName}` / `${AssetsBucketPrefix}` placeholders are substituted by the packaging step
- * (projenrc/cre/scripts/build/package.py) before deploy. Container images go to the project's own
- * repository, {@link creImageRepository}. No bootstrap version rule (nothing is bootstrapped). One
- * per stack: CDK mutates synthesizers during synth, so they can't be shared.
- *
- * `project` is the cdk.json context `cre:projectName` (projen writes it). Without it a stack still
- * synthesizes, but a container image refuses: there is no repository to name.
+ * (projenrc/cre/scripts/build/package.py) before deploy. No bootstrap version rule (nothing is
+ * bootstrapped). One per stack: CDK mutates synthesizers during synth, so they can't be shared.
  */
-export function creSynthesizer(project?: string): cdk.IStackSynthesizer {
-  return new CreSynthesizer(project);
-}
-
-class CreSynthesizer extends cdk.DefaultStackSynthesizer {
-  private readonly project?: string;
-
-  constructor(project?: string) {
-    super({
-      fileAssetsBucketName: '${AssetsBucketName}',
-      bucketPrefix: '${AssetsBucketPrefix}',
-      imageAssetsRepositoryName: creImageRepository(project ?? 'no-project-name'),
-      qualifier: undefined,
-      generateBootstrapVersionRule: false,
-    });
-    this.project = project;
-  }
-
-  public override addDockerImageAsset(asset: cdk.DockerImageAssetSource): cdk.DockerImageAssetLocation {
-    if (!this.project) {
-      throw new Error("A container image needs the project's ECR repository, named from the cdk.json context " +
-        "'cre:projectName', which projen writes (run npx projen).");
-    }
-    return super.addDockerImageAsset(asset);
-  }
+export function creSynthesizer(): cdk.IStackSynthesizer {
+  return new cdk.DefaultStackSynthesizer({
+    fileAssetsBucketName: '${AssetsBucketName}',
+    bucketPrefix: '${AssetsBucketPrefix}',
+    qualifier: undefined,
+    generateBootstrapVersionRule: false,
+  });
 }
 
 const REGION = REGION_NAME;
@@ -147,7 +119,7 @@ export class CreStack extends cdk.Stack {
       }
     }
     const { region, dependsOn, assumeRole, executionRole, ...stackProps } = raw;
-    super(scope, id, { ...stackProps, stackName: id, synthesizer: creSynthesizer(scope.node.tryGetContext('cre:projectName')) });
+    super(scope, id, { ...stackProps, stackName: id, synthesizer: creSynthesizer() });
     this.deployRegion = region;
     this.assumeRole = assumeRole;
     this.executionRole = executionRole;

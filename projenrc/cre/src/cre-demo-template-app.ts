@@ -26,7 +26,7 @@ import { createGitlabWorkflow, DEPLOY_ENVIRONMENT } from './workflows/gitlab-wor
 export const PROJEN_VERSION = '0.104.8';
 
 export interface GitlabOptions {
-  /** Target region: the pipeline's AWS_REGION (assets bucket suffix + AWS_DEFAULT_REGION). */
+  /** Target region: the pipeline's AWS_REGION (the upload and prune jobs run there). */
   readonly awsRegion: string;
 }
 
@@ -52,7 +52,22 @@ export interface GithubOptions {
    * upgrade PR and a merge would never deploy.
    */
   readonly appSlug: string;
+  /**
+   * The repo's visibility on GitHub, which decides how PRs merge and where the deploy runs:
+   *  - `private`: the build workflow merges a PR after its build passes (GitHub's free plan can't
+   *    protect a private repo's main, so its auto-merge wouldn't wait), and the deploy jobs use the
+   *    runner role's trust of main.
+   *  - `public`: GitHub's auto-merge behind main's protection, and every deploy job runs in the
+   *    `AWS` environment, whose OIDC subject the runner role trusts instead of main's.
+   *  - `internal`: as public, without the environment.
+   * Setup writes it; `npx projen setup:github-public` changes it with the repo.
+   * @default 'private'
+   */
+  readonly visibility?: 'private' | 'public' | 'internal';
 }
+
+/** How long the deploy jobs' AWS credentials last on GitHub: setup's runner role allows 2 h (setup-cdk iam-stack.ts). */
+export const GITHUB_ROLE_SECONDS = 7200;
 
 /** The Conventional Commits v1.0.0 types (commit messages and PR titles). */
 export const CONVENTIONAL_TYPES = ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'build', 'ci', 'chore', 'revert'] as const;
@@ -67,26 +82,6 @@ export function trustedAuthors(github: GithubOptions): string[] {
     if (!GITHUB_LOGIN.test(u ?? '')) throw new Error(`github: '${u}' is not a GitHub login.`);
   }
   return [...new Set(people), `${github.appSlug}[bot]`, 'github-actions[bot]', 'dependabot[bot]'];
-}
-
-/**
- * The username in .projenrc.ts against the login setup read from gh (cre-setup.json
- * githubUsername): a hand edit that differs is most likely a typo, and auto-approve would then trust
- * nobody's PRs.
- */
-export function checkGithubUsername(github: GithubOptions, setupFile: string): string | undefined {
-  let recorded: string | undefined;
-  try {
-    recorded = JSON.parse(fs.readFileSync(setupFile, 'utf-8')).githubUsername;
-  } catch {
-    return undefined;
-  }
-  if (recorded && recorded.toLowerCase() !== github.username.toLowerCase() &&
-    !(github.trustedUsers ?? []).some((u) => u.toLowerCase() === recorded!.toLowerCase())) {
-    return `cre: github.username '${github.username}' isn't the GitHub login setup recorded ('${recorded}', cre-setup.json): ` +
-      'auto-approve trusts only the logins in .projenrc.ts. Fix the typo, or add the other login to github.trustedUsers.';
-  }
-  return undefined;
 }
 
 /**
@@ -110,13 +105,13 @@ export function projenCredentials(github: GithubOptions): GithubCredentials {
  *    live: PR #7 merged before its build ran, and the deploy ran untested).
  *  - `auto-merge`: GitHub's auto-merge, which main's branch protection (setup: the `build` check,
  *    one approval) makes wait for the build. For a public (or internal) repo.
- * From cre-setup.json's `githubVisibility` (setup records it; `npx projen setup:github-public`
- * changes it); private when unknown, the safe default (it merges only after a build either way).
+ * From `github.visibility` in .projenrc.ts (private when unset, the safe default: it merges only
+ * after a build either way).
  */
 export type GithubMergeMode = 'workflow' | 'auto-merge';
 
-export function githubMergeMode(setupFile: string): GithubMergeMode {
-  return githubVisibility(setupFile) === 'private' ? 'workflow' : 'auto-merge';
+export function githubMergeMode(github: GithubOptions): GithubMergeMode {
+  return (github.visibility ?? 'private') === 'private' ? 'workflow' : 'auto-merge';
 }
 
 /**
@@ -165,33 +160,6 @@ export function warnLeftThePlan(outdir: string, ids: readonly string[]): string[
         '--domain <old domain>) before tearing it down.' : ''));
   }
   return gone.map((st) => st.id);
-}
-
-/**
- * cre-setup.json's runnerSessionSeconds: how long the runner role lets a session last (setup raises
- * its own role to 2 h and records it), capped at 2 h; undefined when not recorded (1 h then).
- */
-export function runnerSessionSeconds(setupFile: string): number | undefined {
-  try {
-    const v = JSON.parse(fs.readFileSync(setupFile, 'utf-8')).runnerSessionSeconds;
-    return typeof v === 'number' && v > 3600 ? Math.min(v, 7200) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** cre-setup.json's githubVisibility; 'private' (the safe mode) when it isn't recorded, with a warning. */
-export function githubVisibility(setupFile: string): 'private' | 'public' | 'internal' {
-  let v: unknown;
-  try {
-    v = JSON.parse(fs.readFileSync(setupFile, 'utf-8')).githubVisibility;
-  } catch {
-    return 'private';
-  }
-  if (v === 'private' || v === 'public' || v === 'internal') return v;
-  console.warn(`cre: cre-setup.json has no githubVisibility${v === undefined ? '' : ` ('${String(v)}' isn't private, public or internal)`}, ` +
-    'so PRs merge as a private repo\'s do (from the build workflow). Record it: npx projen setup:repo prepare');
-  return 'private';
 }
 
 /**
@@ -448,10 +416,8 @@ export abstract class CreDemoTemplateApp extends awscdk.AwsCdkTypeScriptApp {
       throw new Error('CreDemoTemplateApp: set exactly one of `gitlab` or `github`.');
     }
     const devdirs = [...layout.cdkDirs, 'test', '.projenrc.ts', 'projenrc'];
-    const outdirOpt = (options as { outdir?: string }).outdir;
-    // GitHub only: a GitLab project has no githubVisibility, and its warning would send an agent to
-    // run setup for nothing (review 10c A10).
-    const mergeMode = isGithub ? githubMergeMode(path.join(outdirOpt ?? '.', 'cre-setup.json')) : undefined;
+    // GitHub only: a GitLab project merges with GitLab's own auto-merge.
+    const mergeMode = isGithub ? githubMergeMode(options.github!) : undefined;
 
     super({
       // Not a public option: tests construct projects in a scratch directory.
@@ -560,10 +526,6 @@ export abstract class CreDemoTemplateApp extends awscdk.AwsCdkTypeScriptApp {
     // (fresh clone, no node_modules, a compile error), the committed cre-stacks.json is used.
     // The project name reaches the app as cdk.json context (CreApp.stackId()).
     this.cdkConfig.json.addOverride('context.cre:projectName', this.name);
-    if (options.github) {
-      const warning = checkGithubUsername(options.github, path.join(this.outdir, 'cre-setup.json'));
-      if (warning) console.warn(warning);
-    }
     const read = readPlan(this.outdir, this.name);
     if (read.source !== 'synth') {
       const why = read.detail ? ` (${read.detail})` : '';
@@ -629,9 +591,9 @@ export abstract class CreDemoTemplateApp extends awscdk.AwsCdkTypeScriptApp {
         awsRegion: options.github!.awsRegion,
         jobs,
         pruneAssets: options.pruneAssets,
-        roleDurationSeconds: runnerSessionSeconds(path.join(this.outdir, 'cre-setup.json')),
+        roleDurationSeconds: GITHUB_ROLE_SECONDS,
         publicRepo: mergeMode === 'auto-merge',
-        environment: githubVisibility(path.join(this.outdir, 'cre-setup.json')) === 'public' ? DEPLOY_ENVIRONMENT : undefined,
+        environment: options.github!.visibility === 'public' ? DEPLOY_ENVIRONMENT : undefined,
       });
     } else {
       createGitlabWorkflow(this, {
@@ -641,7 +603,14 @@ export abstract class CreDemoTemplateApp extends awscdk.AwsCdkTypeScriptApp {
 
     createGitTasks(this, this.gitProvider);
     createTemplateTasks(this);
-    createToolingTasks(this, this.gitProvider);
+    createToolingTasks(this, this.gitProvider, {
+      name: this.name,
+      provider: this.gitProvider,
+      repository: options.repository,
+      partition: options.partition,
+      githubEnvironment: isGithub && options.github!.visibility === 'public' ? DEPLOY_ENVIRONMENT : undefined,
+      githubAppSlug: options.github?.appSlug,
+    });
     // @cre/constructs is a dependency: a hand edit to the installed copy fails the build.
     this.testTask.prependExec(`python3 ${CRE_SCRIPTS}/template/verify-constructs.py ${CRE_CONSTRUCTS_DIR}`);
     this.gitattributes.addAttributes(`/${CRE_CONSTRUCTS_DIR}/**`, 'linguist-vendored');

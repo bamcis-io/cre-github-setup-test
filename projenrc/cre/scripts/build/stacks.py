@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The project's deployed stacks, against the stack plan (cre-stacks.json). Uses your AWS credentials
-(the ambient ones, or --profile), in the account setup recorded (cre-setup.json accountId).
+(the ambient ones, or --profile): the stacks there named this project's and deployed from its assets
+bucket in that account.
 
   npx projen stacks [--profile p]                     each planned stack's status, and orphans: deployed
                                                       stacks of this project main's plan no longer has
@@ -20,14 +21,14 @@
                                                       the newest first; --stack with it picks orphans.
 
 A stack is this project's when its name is the project or `<project>-…` AND its AssetsBucketName
-parameter is `<project>-<its region>` (what the deploy passes), so another project whose name starts
-with this one's is never touched. Stacks with `assumeRole` (another account's DNS) are listed but
+parameter is this project's bucket in that account and region (what the deploy passes; assets.py),
+so another project whose name starts with this one's is never touched. Stacks with `assumeRole` (another account's DNS) are listed but
 never deleted here: delete them with that account's credentials.
 
 Assets buckets and the setup roles are never deleted (setup made them; other projects may share
 the roles). Resources a stack retains on delete (a bucket with RemovalPolicy RETAIN) stay.
 
-Exit codes (the setup contract): 0 done | 10 refused (no plan, unknown stack, the wrong account) |
+Exit codes (the setup contract): 0 done | 10 refused (no plan, unknown stack) |
 11 credentials missing or expired | 20 a deletion failed.
 Last stdout line: RESULT code=<n> step=<stacks|outputs|teardown>
 """
@@ -40,6 +41,9 @@ import sys
 sys.dont_write_bytecode = True  # never a __pycache__ in the template clone or projenrc/cre
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "setup"))
 import crelib  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import assets  # noqa: E402
 
 # The setup contract's codes, from the one place they are defined (review 10b F4).
 OK, REFUSED, CREDENTIALS, FAILED = crelib.OK, crelib.REFUSED, crelib.CREDENTIALS, crelib.FAILED
@@ -146,44 +150,33 @@ def context(args):
     plan = load("cre-stacks.json")
     if plan is None:
         raise Stop(REFUSED, "No cre-stacks.json here; run from the project root (npx projen runs there).")
-    setup = load("cre-setup.json") or {}
-    project = os.environ.get("PROJECT_NAME") or setup.get("project")
+    project = os.environ.get("PROJECT_NAME")
     if not project:
-        raise Stop(REFUSED, "PROJECT_NAME is not set and cre-setup.json has no project.")
+        raise Stop(REFUSED, "PROJECT_NAME is not set: run it as npx projen stacks (the project's tasks set it).")
     aws = Aws(args.profile)
     account, arn = aws.account()
-    want = setup.get("accountId")
-    if want and account != want:
-        # 10, as setup says it: the credentials work, they are another account's, and refreshing them
-        # (what 11 tells an agent) changes nothing (review 10f D5).
-        raise Stop(REFUSED, f"These credentials are for account {account} ({arn}), but the project deploys to {want} "
-                   "(cre-setup.json). Use that account's credentials (--profile).")
-    regions = setup.get("regions", "")
-    regions = regions.split() if isinstance(regions, str) else list(regions)
     stacks = plan.get("stacks", [])
-    known = regions + [s["region"] for s in stacks]
+    known = [s["region"] for s in stacks]
     partition = crelib.partition_of(known[0]) if known else "aws"
     regions = list(dict.fromkeys(known + crelib.control_plane_regions(partition)))
     return plan, stacks, project, aws, regions, account
 
 
-def is_ours(stack, project, region, planned=()):
-    """Named like this project's stacks, and deployed from its assets bucket: `<prefix>-<region>`,
-    where the prefix is ASSETS_BUCKET_PREFIX when set (it can differ from the project name, e.g.
-    after a bucket-name collision; review 10b D14). A REVIEW_IN_PROGRESS shell (a failed first
-    create) has no parameters: matched when it is one of the planned stacks (a name alone could be
-    another project's, `demo-two` beside `demo`)."""
+def is_ours(stack, project, region, account, planned=()):
+    """Named like this project's stacks, and deployed from its assets bucket in this account
+    (assets.py's name). A REVIEW_IN_PROGRESS shell (a failed first create) has no parameters:
+    matched when it is one of the planned stacks (a name alone could be another project's,
+    `demo-two` beside `demo`)."""
     name = stack["StackName"]
     if name != project and not name.startswith(project + "-"):
         return False
     if stack.get("StackStatus") == "REVIEW_IN_PROGRESS" and not stack.get("Parameters"):
         return name in planned
     params = {p["ParameterKey"]: p.get("ParameterValue") for p in stack.get("Parameters", [])}
-    prefix = os.environ.get("ASSETS_BUCKET_PREFIX") or project
-    return params.get("AssetsBucketName") in (f"{prefix}-{region}", f"{project}-{region}")
+    return params.get("AssetsBucketName") == assets.bucket_name(project, account, region)
 
 
-def deployed(aws, regions, project, planned=()):
+def deployed(aws, regions, project, account, planned=()):
     """{(name, region): summary} of every stack of this project, in every region it may use."""
     out = {}
     for region in regions:
@@ -194,7 +187,7 @@ def deployed(aws, regions, project, planned=()):
                 args += ["--next-token", token]
             d = aws.json(*args)
             for s in d.get("Stacks", []):
-                if is_ours(s, project, region, planned):
+                if is_ours(s, project, region, account, planned):
                     out[(s["StackName"], region)] = s
             token = d.get("NextToken")
             if not token:
@@ -208,7 +201,7 @@ def cmd_status(args):
     if main_stacks is None:
         say(f"⚠️  {ref}: orphans are judged from this checkout's plan, which may not be what main deploys.")
         main_stacks, ref = stacks, ""
-    found = deployed(aws, regions, project, [st["id"] for st in stacks + main_stacks])
+    found = deployed(aws, regions, project, account, [st["id"] for st in stacks + main_stacks])
     here, on_main = keys(stacks), keys(main_stacks)
     rows = []
     for s in stacks:
@@ -316,7 +309,7 @@ def refuse_production(args, account):
 def cmd_teardown(args):
     plan, stacks, project, aws, regions, account = context(args)
     refuse_production(args, account)
-    found = deployed(aws, regions, project, [st["id"] for st in stacks])
+    found = deployed(aws, regions, project, account, [st["id"] for st in stacks])
     planned_ids = [s["id"] for s in stacks]
     # With --orphans, --stack picks orphans (one out of several, review 10g A3); alone, planned stacks.
     unknown = set(args.stack or []) - set(planned_ids) if not args.orphans else set()

@@ -9,8 +9,7 @@ import type { PlannedStack } from './stack-plan';
  *
  * Every stack job has exactly these variables:
  *   STACK_NAME, TEMPLATE_NAME   the stack's deployed name
- *   AWS_REGION, AWS_DEFAULT_REGION  its region (a literal)
- *   ASSETS_BUCKET               `<ASSETS_BUCKET_PREFIX>-<region>`
+ *   AWS_REGION                  its region (a literal)
  *   OUTPUTS_PREFIX              its outputs go to dist/<stack>.env as `<PREFIX>_<OUTPUT>`
  *   OUTPUTS                     the outputs written there: the ones later stacks take
  *   ROLE_ARN                    CloudFormation's service role (its `executionRole`)
@@ -60,7 +59,7 @@ export interface StackJob {
  * (`RESERVED_VARS` in scripts/setup/crelib.py; a test keeps the two lists equal).
  */
 export const RESERVED_VARIABLES: readonly string[] = [
-  'STACK_NAME', 'TEMPLATE_NAME', 'AWS_REGION', 'AWS_DEFAULT_REGION', 'ASSETS_BUCKET', 'OUTPUTS_PREFIX',
+  'STACK_NAME', 'TEMPLATE_NAME', 'AWS_REGION', 'ASSETS_BUCKET', 'OUTPUTS_PREFIX',
   'OUTPUTS', 'ROLE_ARN', 'ASSUME_ROLE', 'STACK_PARAMETERS', 'REQUIRED_VARS', 'REQUIRED_OUTPUTS',
   'ASSETS_PREFIX', 'PROJECT_NAME', 'CRE_ROLE_ASSUMED',
 ];
@@ -93,8 +92,8 @@ export function outputVariable(stack: PlannedStack, output: string): string {
 export function stackJobs(planned: readonly PlannedStack[], defaults: JobDefaults): StackJob[] {
   const byId = new Map(planned.map((p) => [p.id, p]));
   return planned.map((s) => {
-    const variables = new Set<string>(['ASSETS_BUCKET_PREFIX']);
-    const required = new Set<string>(['ASSETS_BUCKET_PREFIX']);
+    const variables = new Set<string>();
+    const required = new Set<string>();
     const requiredOutputs: string[] = [];
     const v = (name: string, optional: boolean): JobValue => {
       variables.add(name);
@@ -120,8 +119,6 @@ export function stackJobs(planned: readonly PlannedStack[], defaults: JobDefault
       STACK_NAME: lit(s.id),
       TEMPLATE_NAME: lit(s.id),
       AWS_REGION: lit(s.region),
-      AWS_DEFAULT_REGION: lit(s.region),
-      ASSETS_BUCKET: { kind: 'concat', parts: [v('ASSETS_BUCKET_PREFIX', false), lit(`-${s.region}`)] },
       OUTPUTS_PREFIX: lit(s.outputsPrefix),
       OUTPUTS: lit(s.outputs.join(' ')),
       ROLE_ARN: roleArn,
