@@ -66,15 +66,6 @@
         }
       ]
     },
-    "check:deploy-prereqs": {
-      "name": "check:deploy-prereqs",
-      "description": "Fail if a stack needs a region bucket or CI/CD variable setup never made (cre-setup.json); prints the setup command",
-      "steps": [
-        {
-          "exec": "python3 projenrc/cre/scripts/build/check-deploy-prereqs.py cre-stacks.json cre-setup.json cdk.out"
-        }
-      ]
-    },
     "check:generated": {
       "name": "check:generated",
       "description": "CI only: fail when the committed generated files (pipeline, cre-stacks.json, ...) are not what npx projen makes",
@@ -165,21 +156,21 @@
       "name": "deploy:prune",
       "description": "Internal CI job step (use npx projen deploy): Remove old deploy prefixes from every region bucket (keeps current + 2).",
       "requiredEnv": [
-        "ASSETS_BUCKET_PREFIX",
-        "ASSETS_PREFIX"
+        "ASSETS_PREFIX",
+        "PROJECT_NAME"
       ],
       "steps": [
         {
-          "exec": "PRUNE_BUCKETS=\"\" python3 projenrc/cre/scripts/build/prune-assets.py"
+          "exec": "PRUNE_REGIONS=\"\" python3 projenrc/cre/scripts/build/prune-assets.py"
         }
       ]
     },
     "deploy:s3": {
       "name": "deploy:s3",
-      "description": "Internal CI job step (use npx projen deploy): Sync dist/content.zip contents to every listed region's assets bucket.",
+      "description": "Internal CI job step (use npx projen deploy): Make every listed region's assets bucket if missing, and sync dist/content.zip's contents to it.",
       "requiredEnv": [
-        "ASSETS_BUCKET_PREFIX",
-        "ASSETS_PREFIX"
+        "ASSETS_PREFIX",
+        "PROJECT_NAME"
       ],
       "steps": [
         {
@@ -318,9 +309,6 @@
         },
         {
           "spawn": "check:stack-plan"
-        },
-        {
-          "spawn": "check:deploy-prereqs"
         }
       ]
     },
@@ -352,50 +340,46 @@
     },
     "setup:aws": {
       "name": "setup:aws",
-      "description": "Assets buckets, CloudFormation execution role and CI runner role in the target account (idempotent).",
+      "description": "The CI runner role and the CloudFormation execution role in the deploy account, and with --dns-profile the DNS roles in the hosted zone's account, as CloudFormation stacks (idempotent: an unchanged stack is a no-op).",
       "steps": [
         {
-          "exec": "python3 projenrc/cre/scripts/setup/aws_account.py \"$@\"",
-          "receiveArgs": true
-        }
-      ]
-    },
-    "setup:dns": {
-      "name": "setup:dns",
-      "description": "External DNS: check the zone, or create the cross-account DNS roles / SuperNova prerequisites.",
-      "steps": [
-        {
-          "exec": "python3 projenrc/cre/scripts/setup/dns.py \"$@\"",
+          "exec": "python3 projenrc/cre/scripts/cresetup/account.py '--project' 'cre-github-setup-test' '--provider' 'github' '--partition' 'aws' '--github-repo' 'bamcis-io/cre-github-setup-test' \"$@\"",
           "receiveArgs": true
         }
       ]
     },
     "setup:github-app": {
       "name": "setup:github-app",
-      "description": "Create (once) or find your CRE automation GitHub App, aws-cre-automation-<alias>, and its key in ~/.cre.",
+      "description": "Create (once) or check your CRE automation GitHub App, aws-cre-automation-<alias>, and its key in ~/.cre.",
       "steps": [
         {
-          "exec": "python3 projenrc/cre/scripts/setup/github_app.py \"$@\"",
+          "exec": "python3 projenrc/cre/scripts/cresetup/github_app.py \"$@\"",
           "receiveArgs": true
         }
       ]
     },
     "setup:github-public": {
       "name": "setup:github-public",
-      "description": "A private repo made public, end to end (from a clean main): scan the history for credentials, show what becomes readable (--dry-run stops there), then make it public, protect main, regenerate the workflows for GitHub auto-merge, push them as a PR and wait for it to merge.",
+      "description": "A private repo made public, end to end (from a clean main): scan the history for credentials (--dry-run stops there), make it public with the AWS environment, move the deploy trust and role secrets to that environment, then set github.visibility in .projenrc.ts and merge the regenerated workflows as a PR.",
       "steps": [
         {
-          "exec": "python3 projenrc/cre/scripts/setup/repo_github.py publish \"$@\"",
+          "exec": "python3 projenrc/cre/scripts/cresetup/github_public.py '--repo' 'bamcis-io/cre-github-setup-test' '--project' 'cre-github-setup-test' '--app-slug' 'aws-cre-automation-mhaken' '--partition' 'aws' \"$@\"",
           "receiveArgs": true
         }
       ]
     },
     "setup:repo": {
       "name": "setup:repo",
-      "description": "Create/adopt the GitHub repo and set CI variables (prepare | finalize).",
+      "description": "Re-apply the GitHub repo's settings and set the CI/CD variables given (idempotent: only what differs changes). A variable that feeds a noEcho parameter is stored hidden.",
       "steps": [
         {
-          "exec": "python3 projenrc/cre/scripts/setup/repo_github.py \"$@\"",
+          "exec": "python3 projenrc/cre/scripts/cresetup/github.py setup '--repo' 'bamcis-io/cre-github-setup-test' '--app-slug' 'aws-cre-automation-mhaken' --no-create"
+        },
+        {
+          "exec": "python3 projenrc/cre/scripts/cresetup/github.py protect '--repo' 'bamcis-io/cre-github-setup-test'"
+        },
+        {
+          "exec": "python3 projenrc/cre/scripts/cresetup/github.py variables '--repo' 'bamcis-io/cre-github-setup-test' \"$@\"",
           "receiveArgs": true
         }
       ]

@@ -59,7 +59,6 @@ jobs:
       CI: "true"
       PROJECT_NAME: cre-github-setup-test
       ASSETS_PREFIX: cre-github-setup-test/${{ github.run_id }}/
-      ASSETS_BUCKET_PREFIX: ${{ vars.ASSETS_BUCKET_PREFIX || secrets.ASSETS_BUCKET_PREFIX }}
     steps:
       - name: Checkout
         id: checkout
@@ -90,8 +89,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_CREDS_TARGET_ROLE }}
           aws-region: us-east-1
           mask-aws-account-id: true
+          role-duration-seconds: 7200
       - name: Publish templates, assets and images
         id: publish_templates_assets_and_images
+        env:
+          CFN_EXECUTION_ROLE_ARN: ${{ vars.CFN_EXECUTION_ROLE_ARN || secrets.CFN_EXECUTION_ROLE_ARN }}
+          DNS_ROLE_ARN: ${{ vars.DNS_ROLE_ARN || secrets.DNS_ROLE_ARN }}
         run: npx projen deploy:upload
   deploy-prune:
     needs: deploy-upload
@@ -103,7 +106,6 @@ jobs:
       CI: "true"
       PROJECT_NAME: cre-github-setup-test
       ASSETS_PREFIX: cre-github-setup-test/${{ github.run_id }}/
-      ASSETS_BUCKET_PREFIX: ${{ vars.ASSETS_BUCKET_PREFIX || secrets.ASSETS_BUCKET_PREFIX }}
     steps:
       - name: Checkout
         id: checkout
@@ -128,6 +130,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_CREDS_TARGET_ROLE }}
           aws-region: us-east-1
           mask-aws-account-id: true
+          role-duration-seconds: 7200
       - name: Remove old deploy prefixes
         id: remove_old_deploy_prefixes
         run: npx projen deploy:prune

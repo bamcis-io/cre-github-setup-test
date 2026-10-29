@@ -2,15 +2,102 @@ import type { awscdk } from 'projen';
 import type { GitProvider } from './git-tasks';
 import { CRE_SCRIPTS } from '../paths';
 
+/** What the setup tasks pass to the cresetup scripts: the project's own values, from .projenrc.ts. */
+export interface SetupInput {
+  readonly name: string;
+  readonly provider: GitProvider;
+  readonly repository: string;
+  /** @default 'aws' */
+  readonly partition?: string;
+  /** GitHub: a public repo's deploy jobs run in this environment (its OIDC subject is trusted, its variables theirs). */
+  readonly githubEnvironment?: string;
+  /** GitHub: the builder's automation App. */
+  readonly githubAppSlug?: string;
+}
+
+// No quote, space or $, and never a leading - (it would read as a switch).
+const SAFE = /^[A-Za-z0-9.][A-Za-z0-9._/:-]*$/;
+
+/** `repository`'s path: the GitLab group and project, or the GitHub owner and repo. */
+function repositoryPath(repository: string): string[] {
+  let parts: string[];
+  try {
+    parts = new URL(repository).pathname.replace(/\.git$/, '').split('/').filter(Boolean);
+  } catch {
+    throw new Error(`repository '${repository}' isn't a URL (https://<host>/<group or owner>/<name>)`);
+  }
+  if (parts.length < 2) throw new Error(`repository '${repository}' needs a group or owner and a name`);
+  return parts;
+}
+
+/** Switches and values, each single-quoted into a task's shell line: no value may end the quote. */
+function quoted(task: string, args: string[]): string {
+  for (const v of args.filter((_, i) => i % 2 === 1)) {
+    if (!SAFE.test(v)) throw new Error(`${task}: '${v}' (from .projenrc.ts) has characters a task can't pass`);
+  }
+  return args.map((v) => `'${v}'`).join(' ');
+}
+
+/**
+ * account.py's fixed leading switches. The runner role's trust comes from `repository`: on GitLab
+ * the group path (everything before the project), on GitHub `<owner>/<repo>`, whose OIDC subject
+ * account.py reads from GitHub.
+ */
+export function setupAwsArgs(input: SetupInput): string[] {
+  const parts = repositoryPath(input.repository);
+  const trust = input.provider === 'gitlab'
+    ? ['--namespace', parts.slice(0, -1).join('/')]
+    // GitHub's subject names the owner's and repo's IDs (immutable subjects): account.py reads it from GitHub.
+    : ['--github-repo', parts.join('/'),
+      ...(input.githubEnvironment ? ['--github-environment', input.githubEnvironment] : [])];
+  const args = ['--project', input.name, '--provider', input.provider, '--partition', input.partition ?? 'aws', ...trust];
+  quoted('setup:aws', args);
+  return args;
+}
+
+/** github_public.py's fixed switches: the repo, the project, the App and the partition. */
+export function githubPublicArgs(input: SetupInput): string[] {
+  if (!input.githubAppSlug) throw new Error('setup:github-public: github.appSlug is required');
+  return ['--repo', repositoryPath(input.repository).join('/'), '--project', input.name, '--app-slug', input.githubAppSlug,
+    '--partition', input.partition ?? 'aws'];
+}
+
+/**
+ * setup:repo's steps. GitLab: `gitlab.py setup`, which also protects main and sets the variables
+ * given. GitHub: `github.py setup` (repo, App, settings), `github.py protect` (main), then
+ * `github.py variables` with the variables given (in the AWS environment for a public repo). Each re-applies what it finds different and nothing else,
+ * and never creates a missing repo (--no-create): a retired project doesn't come back by a re-run.
+ */
+export function setupRepoSteps(input: SetupInput): { exec: string; receiveArgs?: boolean }[] {
+  const parts = repositoryPath(input.repository);
+  const script = (name: string) => `python3 ${CRE_SCRIPTS}/cresetup/${name}`;
+  if (input.provider === 'gitlab') {
+    const args = ['--project', parts[parts.length - 1], '--namespace', parts.slice(0, -1).join('/'), '--token-file', '.cre/gitlab-token'];
+    return [{ exec: `${script('gitlab.py')} setup ${quoted('setup:repo', args)} --no-create "$@"`, receiveArgs: true }];
+  }
+  if (!input.githubAppSlug) throw new Error('setup:repo: github.appSlug is required');
+  const repo = ['--repo', parts.join('/')];
+  return [
+    { exec: `${script('github.py')} setup ${quoted('setup:repo', [...repo, '--app-slug', input.githubAppSlug])} --no-create` },
+    // main's protection, merged into whatever stronger one is there (a free plan's private repo has none: reported).
+    { exec: `${script('github.py')} protect ${quoted('setup:repo', repo)}` },
+    {
+      exec: `${script('github.py')} variables ${quoted('setup:repo', [...repo,
+        ...(input.githubEnvironment ? ['--environment', input.githubEnvironment] : [])])} "$@"`,
+      receiveArgs: true,
+    },
+  ];
+}
+
 /**
  * Tasks every project type gets besides build/deploy/git:
  *
  *   cfs:curl [--json] <METHOD> <url|/path> [body]   call anything behind CloudFront Signer (Midway)
  *   cfs:onboard [--domain d] [--status]     onboard the edge distribution at CloudFrontSigner
- *   setup:aws / setup:repo / setup:dns      re-run or repair the account / repo / DNS setup that
- *                                           /cre-demo-init ran (same scripts, same flags)
+ *   setup:aws / setup:repo                  re-run or repair the account (and DNS account) / repo
+ *                                           setup that /cre-demo-init ran
  */
-export function createToolingTasks(project: awscdk.AwsCdkTypeScriptApp, provider: GitProvider): void {
+export function createToolingTasks(project: awscdk.AwsCdkTypeScriptApp, provider: GitProvider, setup: SetupInput): void {
   const python = (script: string) => [{ exec: `python3 ${CRE_SCRIPTS}/${script} "$@"`, receiveArgs: true }];
   project.addTask('cfs:curl', {
     description: 'Call a CloudFront Signer (Midway) protected URL: cfs:curl [--json] [-i] GET https://dxxxx.cloudfront.net/path [body]',
@@ -21,27 +108,30 @@ export function createToolingTasks(project: awscdk.AwsCdkTypeScriptApp, provider
     steps: python('cfs/cfs-onboard.py'),
   });
   project.addTask('setup:aws', {
-    description: 'Assets buckets, CloudFormation execution role and CI runner role in the target account (idempotent).',
-    steps: python('setup/aws_account.py'),
+    description: 'The CI runner role and the CloudFormation execution role in the deploy account, and with --dns-profile the '
+      + 'DNS roles in the hosted zone\'s account, as CloudFormation stacks (idempotent: an unchanged stack is a no-op).',
+    steps: [{
+      exec: `python3 ${CRE_SCRIPTS}/cresetup/account.py ${quoted('setup:aws', setupAwsArgs(setup))} "$@"`,
+      receiveArgs: true,
+    }],
   });
   project.addTask('setup:repo', {
-    description: `Create/adopt the ${provider === 'gitlab' ? 'GitLab project' : 'GitHub repo'} and set CI variables (prepare | finalize).`,
-    steps: python(`setup/repo_${provider}.py`),
+    description: `Re-apply the ${provider === 'gitlab' ? 'GitLab project' : 'GitHub repo'}'s settings and set the CI/CD variables `
+      + 'given (idempotent: only what differs changes). A variable that feeds a noEcho parameter is stored hidden.',
+    steps: setupRepoSteps(setup),
   });
   if (provider === 'github') {
     project.addTask('setup:github-public', {
-      description: 'A private repo made public, end to end (from a clean main): scan the history for credentials, show what becomes readable (--dry-run stops there), then make it public, protect main, regenerate the workflows for GitHub auto-merge, push them as a PR and wait for it to merge.',
-      steps: [{ exec: `python3 ${CRE_SCRIPTS}/setup/repo_github.py publish "$@"`, receiveArgs: true }],
+      description: 'A private repo made public, end to end (from a clean main): scan the history for credentials (--dry-run stops '
+        + 'there), make it public with the AWS environment, move the deploy trust and role secrets to that environment, then '
+        + 'set github.visibility in .projenrc.ts and merge the regenerated workflows as a PR.',
+      steps: [{ exec: `python3 ${CRE_SCRIPTS}/cresetup/github_public.py ${quoted('setup:github-public', githubPublicArgs(setup))} "$@"`, receiveArgs: true }],
     });
     project.addTask('setup:github-app', {
-      description: 'Create (once) or find your CRE automation GitHub App, aws-cre-automation-<alias>, and its key in ~/.cre.',
-      steps: python('setup/github_app.py'),
+      description: 'Create (once) or check your CRE automation GitHub App, aws-cre-automation-<alias>, and its key in ~/.cre.',
+      steps: python('cresetup/github_app.py'),
     });
   }
-  project.addTask('setup:dns', {
-    description: 'External DNS: check the zone, or create the cross-account DNS roles / SuperNova prerequisites.',
-    steps: python('setup/dns.py'),
-  });
 }
 
 /** CreFailureScenario checks, run as part of `test`. */

@@ -109,7 +109,7 @@ def check_job(sid, spec, job):
         problems.append(f"{sid}: its deploy job passes {sorted(keys)}, not the plan's parameters {sorted(spec['parameters'])}.")
     if env.get("OUTPUTS", "").split() != spec["outputs"]:
         problems.append(f"{sid}: its deploy job writes outputs {env.get('OUTPUTS', '').split()}, not the plan's {spec['outputs']}.")
-    for k, want in (("STACK_NAME", sid), ("TEMPLATE_NAME", sid), ("AWS_REGION", spec["region"]), ("AWS_DEFAULT_REGION", spec["region"])):
+    for k, want in (("STACK_NAME", sid), ("TEMPLATE_NAME", sid), ("AWS_REGION", spec["region"])):
         if env.get(k) != want:
             problems.append(f"{sid}: its deploy job sets {k}={env.get(k)!r}, not {want!r}.")
     if job.get("needs") != spec.get("needs"):

@@ -9,7 +9,9 @@ Required env:
   AWS_REGION          the stack's region; its assets bucket is in the same region
   STACK_NAME          the CloudFormation stack name
   TEMPLATE_NAME       the template's base name (no extension) under the prefix
-  ASSETS_BUCKET       the region's assets bucket (filled by the upload)
+  ASSETS_BUCKET       the region's assets bucket; when unset, named from PROJECT_NAME, the account
+                      and AWS_REGION (assets.py), before any ASSUME_ROLE: the templates are always
+                      in the app account's bucket, also for a stack deployed into another account
   ASSETS_PREFIX       the run's key prefix (a trailing / is added)
 
 Optional env:
@@ -53,6 +55,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import crelib  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import assets  # noqa: E402
 EXPIRED = crelib.CREDENTIALS_LAPSED   # one copy of how the CLI says it (review 10f D1)
 THROTTLED = re.compile(r"Throttl|Rate exceeded|RequestLimitExceeded")
 
@@ -102,9 +106,16 @@ def preflight(env):
             raise Fail(f"{env.get('STACK_NAME') or 'this stack'} deploys into account {target} (as {assume}), but its execution "
                        f"role {role_arn} is account {owner}'s: CloudFormation there can't use it. Set the stack's executionRole "
                        f"variable (e.g. DNS_CFN_EXECUTION_ROLE_ARN) to a role in {target} (npx projen setup:dns makes it).")
+    if not env.get("ASSETS_BUCKET") and env.get("AWS_REGION"):
+        if not env.get("PROJECT_NAME"):
+            raise Fail("PROJECT_NAME is required (the assets bucket is named from it)")
+        try:
+            env["ASSETS_BUCKET"] = assets.bucket_name(env["PROJECT_NAME"], assets.account(), env["AWS_REGION"])
+        except assets.Fail as e:
+            raise Fail(str(e))
     if assume and not env.get("CRE_ROLE_ASSUMED"):
         crelib.exec_replace([sys.executable, os.path.join(HERE, "with-role.py"), assume, sys.executable, os.path.abspath(__file__)],
-                            {**os.environ, "CRE_ROLE_ASSUMED": "1", "ROLE_ARN": role_arn})
+                            {**os.environ, "CRE_ROLE_ASSUMED": "1", "ROLE_ARN": role_arn, "ASSETS_BUCKET": env.get("ASSETS_BUCKET", "")})
     for k in ("AWS_REGION", "STACK_NAME", "TEMPLATE_NAME", "ASSETS_BUCKET", "ASSETS_PREFIX"):
         if not env.get(k):
             raise Fail(f"{k} is required")

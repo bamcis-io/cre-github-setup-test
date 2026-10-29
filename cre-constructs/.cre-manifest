@@ -19,7 +19,7 @@ af5752982b2afc419f0357d327060b0c234740514da7d2f250bb50315277871a  ./auth/federat
 9049b3b26bc8518598458c47711365a0a96bf285466b7a7ecdd88ec041be8253  ./auth/federate-alb/index.ts
 42bdff970f90d2b73b01e3293b6f91de6ac540beae36bda43840ec2535096120  ./auth/index.ts
 3f7fab22e89a738e94117c8635140b8f31ad4ebbca43910a61b0bd49db921b54  ./core/cre-cfn-parameter.ts
-071d810b556ff9e91961fbebc53f7372dd18a0c0a715e3634f363b7b1920da2b  ./core/cre-stack.ts
+eb0b8b5477e2f89ba0a7f408d18c2c2e8805271c3fe0333d3c86f63e0c3068cd  ./core/cre-stack.ts
 59383303afddbf132e8ea26977aeb1b7df60fc3c71693c902f7c0cf21904fa61  ./core/iam-stack.ts
 96895c21de3df47c974c5961c52d03fbced4c1fc4bb8ed9b4dd634d7a884f89b  ./core/index.ts
 d24ebdd1cee1a4df37e981fcbb832fbf74ed75beaa60661050fad369c7dbefb3  ./core/names.ts
@@ -48,4 +48,4 @@ fbb0472da2da4445465d030f116b9b5f7231bf532c7938cb253420d61f02747e  ./networking/i
 663a2fb9457d7c44f999d5ac799a5d4d49be60deae7019fcf071c6e58243dedf  ./observability/demo-observability.ts
 1beda4d6e4674fae5a8acf33844589f6c0904c9bfda99e0be01e4c5a8ad63dcb  ./observability/index.ts
 7bd0f111f8a46d2be23ddce4e4f058588b9a4628f0aa70c8a3b6a3a54d7f0e89  ./observability/metric-namespace.ts
-3069ffa5a8c49f31a839b683ca97677c5684814409ed6ee33836c466c64b9ba0  ./package.json
+6885364152eb027e0b157e4b92c9d44ac87203de1ae427bf4795a90fbd507a75  ./package.json

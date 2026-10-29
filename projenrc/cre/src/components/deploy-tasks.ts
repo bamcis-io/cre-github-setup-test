@@ -6,9 +6,9 @@ import type { PlannedStack } from './stack-plan';
  * The deploy's projen tasks, generated from the project's stacks (the CDK app, read into cre-stacks.json,
  * resolved by stack-plan.ts). The CI pipelines run one job per stack (stack-jobs.ts) and call:
  *
- *   deploy:upload  publish templates and assets to `<ASSETS_BUCKET_PREFIX>-<region>` for every
- *                  listed region (deploy:s3), and image tarballs to ECR in the regions of the
- *                  stacks that use them (deploy:docker, with containerImages)
+ *   deploy:upload  make each listed region's assets bucket if missing, and publish templates and
+ *                  assets to it (deploy:s3, scripts/build/assets.py), and image tarballs to ECR in
+ *                  the regions of the stacks that use them (deploy:docker, with containerImages)
  *   deploy:stack   deploy one stack with the variables its job sets (scripts/build/deploy-stack.py)
  *   deploy:prune   remove old asset prefixes (keeps the current one and two before it)
  *
@@ -35,46 +35,21 @@ export function createDeployTasks(
   opts: DeployTaskOptions = {},
 ): void {
   const regions = [...new Set(stacks.map((s) => s.region))];
-  const bucket = (region: string) => `$ASSETS_BUCKET_PREFIX-${region}`;
-  // requiredEnv tests that the name is set, and on GitHub it always is (`vars.X || secrets.X` is ''
-  // when neither exists), so a missing ASSETS_BUCKET_PREFIX reached head-bucket as `--bucket -<region>`
-  // and was reported as expired credentials (review 10f D2). The value is checked first.
-  const prefixSet = {
-    exec: 'test -n "$ASSETS_BUCKET_PREFIX" || { echo "ASSETS_BUCKET_PREFIX is set but EMPTY: the deploy variable holding the assets ' +
-      'bucket prefix (the project name) is missing. Set it: npx projen setup:repo prepare --var ASSETS_BUCKET_PREFIX=<project>, then re-run." >&2; exit 1; }',
-    shell: ['bash', '-c'],
-  };
+  const regionList = regions.join(' ');
 
-  // Sync the unpacked dist/content.zip to every region's bucket: one step per region, each naming
-  // its region as a literal. Not an env var threaded down from `deploy`: projen forwards a spawn
-  // step's env exactly one hop and the publish chain is two (deploy → deploy:upload → deploy:s3),
-  // so a threaded region publishes everything to the ambient region's bucket. Three demos shipped
-  // that bug; test/deploy-tasks.test.ts EXECUTES this tree to keep it fixed.
+  // Every region's bucket made if missing (a CloudFormation stack per region), then dist/content.zip
+  // synced to it (scripts/build/assets.py). The regions are a literal here, never an env var threaded
+  // down from `deploy`: projen forwards a spawn step's env one hop and this chain is two (deploy →
+  // deploy:upload → deploy:s3), so a threaded region published everything to the ambient region's
+  // bucket in three demos; test/deploy-tasks.test.ts EXECUTES this tree to keep it fixed.
   const deployS3 = project.addTask('deploy:s3', {
-    description: "Internal CI job step (use npx projen deploy): Sync dist/content.zip contents to every listed region's assets bucket.",
-    requiredEnv: ['ASSETS_BUCKET_PREFIX', 'ASSETS_PREFIX'],
-    // No stacks (a fresh scaffold): no region, so nothing to check, unpack or sync.
+    description: "Internal CI job step (use npx projen deploy): Make every listed region's assets bucket if missing, and sync dist/content.zip's contents to it.",
+    requiredEnv: ['ASSETS_PREFIX', 'PROJECT_NAME'],
+    // No stacks (a fresh scaffold): no region, so nothing to make or upload.
     steps: regions.length === 0 ? [{ say: 'No stacks in the app yet: nothing to upload.' }] : [
-      prefixSet,
-      { say: 'Checking every region has its assets bucket...' },
-      // A missing bucket and missing credentials both fail head-bucket: say which (#16).
-      ...regions.map((r) => ({
-        exec: `out=$(aws s3api head-bucket --region "${r}" --bucket "${bucket(r)}" 2>&1) || { case "$out" in ` +
-          `*"(404)"*|*"Not Found"*|*NoSuchBucket*) echo "Assets bucket ${bucket(r)} does not exist: run npx projen setup:aws for ${r}." >&2 ;; ` +
-          `*"(403)"*|*Forbidden*) echo "Assets bucket ${bucket(r)} is not readable with these AWS credentials ($(aws sts get-caller-identity --query Arn --output text 2>&1)): the runner role needs s3:ListBucket on it, or the bucket is another account's." >&2 ;; ` +
-          `*) echo "Could not check assets bucket ${bucket(r)}: $out (AWS credentials missing or expired?)" >&2 ;; esac; exit 1; }`,
-        shell: ['bash', '-c'],
-      })),
       { say: 'Unpacking dist/content.zip...' },
       { exec: 'rm -rf dist/content && mkdir -p dist/content && unzip -q dist/content.zip -d dist/content' },
-      // --region is explicit so we don't rely on the CLI's auto-discovery HEAD call (which some
-      // scoped IAM policies don't permit). containers/ go to ECR, not S3.
-      ...regions.map((r) => ({
-        exec: [
-          `echo "Syncing dist/content/ → s3://${bucket(r)}/$ASSETS_PREFIX";`,
-          `aws s3 sync --no-progress --region "${r}" --exclude "containers/*" dist/content "s3://${bucket(r)}/$ASSETS_PREFIX"`,
-        ].join(' '),
-      })),
+      { exec: `python3 ${CRE_SCRIPTS}/build/assets.py upload --regions "${regionList}"` },
     ],
   });
 
@@ -108,11 +83,10 @@ export function createDeployTasks(
   if (opts.pruneAssets !== false) {
     project.addTask('deploy:prune', {
       description: 'Internal CI job step (use npx projen deploy): Remove old deploy prefixes from every region bucket (keeps current + 2).',
-      requiredEnv: ['ASSETS_BUCKET_PREFIX', 'ASSETS_PREFIX'],
-      // region=bucket pairs: the region is known here, never parsed from the bucket name (a project
-      // name ending in a short word read as the region's first part; review 10c D2).
-      // No stacks (the scaffold): no bucket to name, so nothing to check.
-      steps: [...(regions.length ? [prefixSet] : []), { exec: `PRUNE_BUCKETS="${regions.map((r) => `${r}=${bucket(r)}`).join(' ')}" python3 ${CRE_SCRIPTS}/build/prune-assets.py` }],
+      requiredEnv: ['ASSETS_PREFIX', 'PROJECT_NAME'],
+      // The regions, as a literal: each one's bucket is named from the project and the account
+      // (assets.py), never parsed from a name (review 10c D2).
+      steps: [{ exec: `PRUNE_REGIONS="${regionList}" python3 ${CRE_SCRIPTS}/build/prune-assets.py` }],
     });
   }
 

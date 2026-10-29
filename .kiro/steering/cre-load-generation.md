@@ -133,7 +133,8 @@ docker run --rm -p 8089:8089 -e TARGET_URL=https://example.com -e LOCUST_WEB_UI=
 ```
 
 Then open `http://localhost:8089/locust/` and each page. `AWS_DEFAULT_REGION` is needed for a
-module-scope boto3 client (Fargate sets it; `AWS_REGION` alone isn't enough for the pinned boto3).
+module-scope boto3 client: boto3 reads only that variable, never `AWS_REGION` (with only
+`AWS_REGION` set, boto3 1.43 raises `NoRegionError`). Fargate sets it in the task.
 The container has no AWS credentials, so a page that reads AWS (an `/inject` page's status read)
 answers 500 (`NoCredentialsError`) and stays on "loading...": expected, not a bug in the handler.
 To exercise those reads, pass read-only credentials for the demo's account:

@@ -106,7 +106,7 @@ parameter without a default or a source), `CreStack` (base class for every top-l
 `region`, `dependsOn`, `assumeRole`, `executionRole`; stack name = id; the deploy's S3-prefix
 synthesizer; the `AssetsBucketName`/`AssetsBucketPrefix` parameters every deploy passes; no `env`),
 `CreCfnParameter` (a parameter with its source: `from` another stack's value, or `fromVariable`),
-`creSynthesizer()` (container images go to the project's own ECR repository `cre/<project>`, named by `creImageRepository()`, never CDK's shared bootstrap repository), `requireDeployRegion()` (a deploy-time Rule that the stack is in one of the given
+`creSynthesizer()`, `requireDeployRegion()` (a deploy-time Rule that the stack is in one of the given
 regions), and `CreIamStack` (the shared IAM stack, refused outside its partition's IAM control-plane
 region, us-east-1 in `aws`). **When:** every project: one `CreApp`, every stack a `CreStack`, every
 passed parameter a `CreCfnParameter`. Roles shared by stacks in several regions go in a

@@ -6,8 +6,8 @@
 Reads the jobs projen generated into cre-stacks.json (the same records the GitLab / GitHub pipeline
 is generated from) and does what the CI runner does:
 
-  0. Checks the credentials are for the account setup recorded (cre-setup.json accountId), and
-     builds (`npx projen build`: synth, tests, packaging) unless --no-build: the pipeline deploys
+  0. Says whose credentials it uses (a wrong account has no bucket of this project's, so the
+     upload makes one there: check the line), and builds (`npx projen build`: synth, tests, packaging) unless --no-build: the pipeline deploys
      only what its build job made, and so does this.
   1. Gets every variable the jobs need: from the environment, then `.cre/deploy.env` (KEY=VALUE
      lines, gitignored; setup writes the values it set), then, on a terminal, a prompt. Without a
@@ -43,7 +43,6 @@ import crelib  # noqa: E402  (one copy of the output-to-variable rule, review 10
 
 PLAN = pathlib.Path("cre-stacks.json")
 LOCAL_ENV = pathlib.Path(".cre/deploy.env")
-SETUP = pathlib.Path("cre-setup.json")
 VARIABLE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
@@ -119,15 +118,6 @@ def check_account(env):
     if r.returncode != 0:
         die("AWS credentials missing or expired (sts get-caller-identity failed). Refresh them, or pass --profile.")
     ident = json.loads(r.stdout)
-    want = ""
-    if SETUP.is_file():
-        try:
-            want = json.loads(SETUP.read_text()).get("accountId", "")
-        except ValueError:
-            want = ""
-    if want and ident["Account"] != want:
-        die(f"these credentials are for account {ident['Account']} ({ident['Arn']}), but the project deploys to {want} "
-            f"({SETUP}). Use that account's credentials (--profile).")
     print(f"deploy: as {ident['Arn']} (account {ident['Account']})", flush=True)
 
 

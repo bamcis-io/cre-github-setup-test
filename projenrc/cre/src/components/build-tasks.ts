@@ -58,7 +58,7 @@ const CLEAN = 'rm -rf assets cdk.out && mkdir -p assets dist';
  * The checks straight after synth, in order: one list for post-compile (local `npx projen build`)
  * and ci:build:cdk, so a check added to one is never missing from the other (review 10b F9).
  */
-const POST_SYNTH_CHECKS = ['check:stack-wiring', 'check:stack-plan', 'check:deploy-prereqs'] as const;
+const POST_SYNTH_CHECKS = ['check:stack-wiring', 'check:stack-plan'] as const;
 
 export function createBuildTasks(
   project: awscdk.AwsCdkTypeScriptApp,
@@ -158,14 +158,9 @@ export function createBuildTasks(
     steps: [{ exec: `python3 ${CRE_SCRIPTS}/build/check-stack-plan.py cre-stacks.json cdk.out --container-images ${opts.containerImages ? 'on' : 'off'}` }],
   });
 
-  // The stacks can deploy with what setup created (#26): their regions have buckets, their
-  // variables were set, secrets are masked. Offline (cre-setup.json), so a gap fails the MR's
-  // build instead of the deploy after the merge.
-  const checkPrereqs = project.addTask('check:deploy-prereqs', {
-    description: 'Fail if a stack needs a region bucket or CI/CD variable setup never made (cre-setup.json); prints the setup command',
-    steps: [{ exec: `python3 ${CRE_SCRIPTS}/build/check-deploy-prereqs.py cre-stacks.json cre-setup.json cdk.out` }],
-  });
-  for (const t of [checkWiring, checkPlan, checkPrereqs]) {
+  // No check that setup set each variable a stack needs: a CI job can't list the project's
+  // variables, and the deploy stops on an unset one before it calls CloudFormation (REQUIRED_VARS).
+  for (const t of [checkWiring, checkPlan]) {
     if (!POST_SYNTH_CHECKS.includes(t.name as typeof POST_SYNTH_CHECKS[number])) throw new Error(`cre: ${t.name} isn't in POST_SYNTH_CHECKS`);
   }
   for (const name of POST_SYNTH_CHECKS) project.postCompileTask.spawn(project.tasks.tryFind(name)!);

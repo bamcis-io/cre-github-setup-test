@@ -330,7 +330,7 @@ export function writePlanFile(
 /**
  * Every deploy environment variable the stacks name (parameters and roles), split into required
  * (`$VAR`), optional (`$VAR?`) and defaulted (the deploy supplies a value when it is unset, e.g.
- * `BINDLE_ID`; check:deploy-prereqs doesn't ask setup for those).
+ * `BINDLE_ID`).
  */
 export function planEnvironment(
   planned: readonly PlannedStack[],

@@ -317,16 +317,21 @@ class GitLabApi:
 
 # ---- GitHub --------------------------------------------------------------------------------------
 
+BUILD_MERGE_JOB = re.compile(r"^  merge:\s*$", re.M)   # build.yml's `merge` job (addBuildMergeJob)
+
+
 def merge_mode():
-    """How a CRE GitHub project merges (cre-demo-template-app.ts githubMergeMode): "workflow" (a
-    private repo: the build workflow merges after a passing build), "auto-merge" (public: GitHub
-    auto-merge behind branch protection), or "" outside a CRE project (no cre-setup.json)."""
+    """How a CRE GitHub project merges (cre-demo-template-app.ts githubMergeMode, from
+    `github.visibility` in .projenrc.ts), read from the workflow projen generated from it, so the two
+    always agree: "workflow" when the build workflow has its `merge` job (a private repo: it merges
+    after a passing build), "auto-merge" when it hasn't (GitHub auto-merge behind branch
+    protection), or "" outside a CRE GitHub project (no .github/workflows/build.yml)."""
     try:
-        with open("cre-setup.json") as f:
-            v = json.load(f).get("githubVisibility")
-    except (OSError, ValueError, AttributeError):
+        with open(os.path.join(".github", "workflows", "build.yml")) as f:
+            text = f.read()
+    except OSError:
         return ""
-    return "auto-merge" if v in ("public", "internal") else "workflow"
+    return "workflow" if BUILD_MERGE_JOB.search(text) else "auto-merge"
 
 
 def github_repo(url):

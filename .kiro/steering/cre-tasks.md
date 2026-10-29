@@ -103,30 +103,33 @@ Validate, commit, push, open or update the MR/PR, arm auto-merge. Every commit i
 
 ### `setup:github-app`
 
-`npx projen setup:github-app [--alias <a>] [--key-dir <dir>] [--wait [<s>]] [--code <code-or-callback>] [--port <n>] [--dry-run]`
+`npx projen setup:github-app [--alias <a>] [--key-dir <dir>] [--wait <s>]`
 
-Create (once) or find your CRE automation GitHub App, aws-cre-automation-<alias>, and its key in ~/.cre.
+Create (once) or check your CRE automation GitHub App, aws-cre-automation-<alias>, and its key in ~/.cre.
 
 - `--alias`: your Amazon alias (default `whoami`); the App is aws-cre-automation-<alias>
 - `--key-dir`: where its key lives (default ~/.cre)
-- `--wait`: wait for the browser step (seconds; no number: 90)
-- `--code`: over SSH: the callback address the browser failed to open
-- `--port`: the local callback server's port
-- `--dry-run`: print the plan, change nothing
+- `--wait`: seconds to wait for the "Create GitHub App" click (default 600; 0 opens nothing and doesn't wait)
 
-Exit 13 with NEEDS=APP_CREATE: a browser click, then re-run.
+One App per builder, for all their repos: it exists and is yours, its key is one of its keys, and it has Contents, Pull requests and Workflows write; otherwise GitHub's manifest flow makes it (one browser click). Exit 0 ready | 10 refused (another owner's App by that name, no or wrong key, missing permissions, or not created yet: the page's address is printed) | 11 gh isn't signed in | 20 a call failed.
 
 ### `setup:github-public`
 
-`npx projen setup:github-public [--dry-run] [--repo <owner/name>] [--dir <path>]`
+`npx projen setup:github-public --profile <p> [--dns-profile <p>] [--allow-production <account>]... [--dry-run]`
 
-A private repo made public, end to end (from a clean main): scan the history for credentials, show what becomes readable (--dry-run stops there), then make it public, protect main, regenerate the workflows for GitHub auto-merge, push them as a PR and wait for it to merge.
+A private repo made public, end to end (from a clean main): scan the history for credentials (--dry-run stops there), make it public with the AWS environment, move the deploy trust and role secrets to that environment, then set github.visibility in .projenrc.ts and merge the regenerated workflows as a PR.
 
-- `--dry-run`: scan the history and print what becomes readable, change nothing
-- `--repo`: owner/repo (default: cre-setup.json)
-- `--dir`: the project directory (default: here)
+- `--profile`: the deploy account's AWS profile (the runner role's trust moves to the `AWS` environment)
+- `--dns-profile`: the hosted zone account's profile, when the project has one: its stack's trust moves too
+- `--allow-production`: an account Isengard calls production, or can't classify, as for setup:aws. Only after the user agrees
+- `--dry-run`: scan the history and say what becomes readable; change nothing
+- `--dir`: the project's clone (default: here)
+- `--repo`: set by the task (`<owner>/<repo>` from `repository`); a second value is refused
+- `--project`: set by the task (.projenrc.ts `name`); a second value is refused
+- `--app-slug`: set by the task (`github.appSlug`): the App approves and merges the switch's PR; a second value is refused
+- `--partition`: set by the task (.projenrc.ts `partition`, default aws); a second value is refused
 
-Makes the repo public: running it is the decision, so it doesn't ask. Only when the user asks (show them the `--dry-run` first). Re-running carries on where it stopped. Other repo_github.py switches are refused here (exit 10).
+From main with nothing uncommitted. Makes the repo public: running it is the decision, so it doesn't ask. Only when the user asks (show them `--dry-run` first). Refused (10) when the history holds something shaped like a credential. Between moving the trust and merging its PR, main's old workflow can't deploy. Repo-level variables and secrets it didn't set are named: set each again with setup:repo. Re-running carries on where it stopped (.git/cre-github-public.json). Exit 0 | 10 refused | 11 credentials | 20 a call failed.
 
 ### `stacks`
 
@@ -189,14 +192,13 @@ Read-only: follow an MR/PR from its checks through the merge to the deploy of it
 
 Read-only. `<n>` is MR !n / PR #n; none of them: the current branch's MR/PR. Exit 0 reached --until | 10 nothing to watch | 11 credentials | 20 closed unmerged | 30 a job failed | 40 timed out, never started, or the MR/PR couldn't be read (re-run).
 
-**Setup** (`setup:aws`, `setup:dns`, `setup:repo`): account, DNS and repository setup, used once or twice in a project's life. They change the AWS account or the repo, so ask the user first. Their usage and switches are in `cre-pipelines-detail.md` ("Setup tasks and their switches").
+**Setup** (`setup:aws`, `setup:repo`): account, DNS and repository setup, used once or twice in a project's life. They change the AWS account or the repo, so ask the user first. Their usage and switches are in `cre-pipelines-detail.md` ("Setup tasks and their switches").
 
 ## Other tasks
 
 | Task | What it does |
 |---|---|
 | `build` | Full release build |
-| `check:deploy-prereqs` | Fail if a stack needs a region bucket or CI/CD variable setup never made (cre-setup.json); prints the setup command |
 | `check:generated` | CI only: fail when the committed generated files (pipeline, cre-stacks.json, ...) are not what npx projen makes |
 | `check:stack-plan` | Fail if the synthesized stacks differ from the committed cre-stacks.json (names, environments, parameters, outputs, jobs) |
 | `check:stack-wiring` | Fail if any synthesized stack uses a CloudFormation export/import or crossRegionReferences (pass outputs -> parameters instead) |

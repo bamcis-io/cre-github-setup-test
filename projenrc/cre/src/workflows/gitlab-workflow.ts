@@ -109,9 +109,9 @@ function upgradeJob(): gitlab.Job {
     // clone would list main's older commits too).
     variables: { GIT_DEPTH: '0' },
     script: [
-      `test -n "\${${UPGRADE_VARIABLE}:-}" || { echo "${UPGRADE_VARIABLE} is not set: run npx projen setup:repo finalize" >&2; exit 1; }`,
+      `test -n "\${${UPGRADE_VARIABLE}:-}" || { echo "${UPGRADE_VARIABLE} is not set: run npx projen setup:repo" >&2; exit 1; }`,
       // The token lasts a year; an expired one would fail at the push with a bare auth error (review 10c C9).
-      `git ls-remote ${remote} HEAD >/dev/null 2>&1 || { echo "${UPGRADE_VARIABLE} is expired or revoked: rotate it with npx projen setup:repo finalize" >&2; exit 1; }`,
+      `git ls-remote ${remote} HEAD >/dev/null 2>&1 || { echo "${UPGRADE_VARIABLE} is expired or revoked: rotate it with npx projen setup:repo" >&2; exit 1; }`,
       // A person's commit on the upgrade branch (a fix to make it build) is never force-pushed away:
       // the job skips until that MR merges or the branch is deleted (review 10c B15). LEASE is the
       // branch as the project has it now ("" when absent), which the push below must still find:
@@ -163,13 +163,16 @@ function upgradeJob(): gitlab.Job {
  * AWS credentials are minted by the GitLab runner wrapper from the project-level
  * `AWS_CREDS_TARGET_ROLE` CI/CD variable (kept out of the repo), the same role in every job; a
  * stack in another account assumes its `assumeRole` from it (role chaining in deploy-stack.py).
- * `AWS_DEFAULT_REGION` is the stack's region in each stack job.
+ * `AWS_REGION` is the stack's region in each stack job (the CLI v2 reads it). Every deploy job also
+ * sets `AWS_DEFAULT_REGION` to the same region: gitlab.aws.dev's AWS Credential Vendor mints
+ * credentials only for a job that sets both `AWS_CREDS_TARGET_ROLE` and `AWS_DEFAULT_REGION`
+ * (BuilderHub, "Vending AWS credentials to CI/CD jobs"); a job without it gets none, and every AWS
+ * call fails "Unable to locate credentials" (seen live when it was removed). GitHub's credentials
+ * come from aws-actions/configure-aws-credentials, which needs neither.
  *
  * Operators set these CI/CD variables in GitLab project settings:
  *   AWS_CREDS_TARGET_ROLE   IAM role ARN the runner wrapper assumes for AWS calls.
  *                           Protected: yes (see the deploy stage note above).
- *   ASSETS_BUCKET_PREFIX    Common prefix; the regional bucket is `<prefix>-<region>`, one per
- *                           region a stack deploys to (setup:aws creates them).
  *   Every variable the stacks name (CreCfnParameter fromVariable, assumeRole, executionRole;
  *   CFN_EXECUTION_ROLE_ARN by default). GitLab passes project CI/CD variables to every job, so
  *   each stack job references the ones it uses, and fails fast on a required one that's empty.
@@ -232,8 +235,6 @@ export function createGitlabWorkflow(
       // Defaults for deploy variables (GitLab has no `${X:-default}`). A project CI/CD
       // variable of the same name overrides them.
       ...opts.defaults,
-      // ASSETS_BUCKET_PREFIX has no sensible default — always set it as a CI/CD
-      // variable (the operator creates one bucket per region).
     },
   });
 
@@ -326,6 +327,8 @@ export function createGitlabWorkflow(
     // GitLab refuses a resource_group key with `:` (deploy:<stack>) and silently drops it.
     resourceGroup: name.replace(/:/g, '-'),
     ...job,
+    // The credential vendor's region (see the header): the stack's own, or the pipeline's.
+    variables: { AWS_DEFAULT_REGION: job.variables?.AWS_REGION ?? '$AWS_REGION', ...job.variables },
   });
 
   const deployJobs: Record<string, gitlab.Job> = {
@@ -333,7 +336,6 @@ export function createGitlabWorkflow(
       needs: ['build:package'],
       // crane only with container images (it pushes the pre-built tarballs).
       ...(opts.containerImages ? { beforeScript: [...TOOLCHAIN_INSTALL, ...CRANE_INSTALL, ...YARN_SETUP] } : {}),
-      variables: { AWS_DEFAULT_REGION: '$AWS_REGION' },
       script: ['npx projen deploy:upload'],
     }),
   };
@@ -356,7 +358,6 @@ export function createGitlabWorkflow(
       // After every stack job, and after the upload: with no stacks, `needs: []` would mean "start
       // at once", in parallel with the upload.
       needs: [{ job: UPLOAD_JOB.gitlab, artifacts: false }, ...opts.jobs.map((j) => ({ job: j.gitlabJob, artifacts: false }))],
-      variables: { AWS_DEFAULT_REGION: '$AWS_REGION' },
       script: ['npx projen deploy:prune'],
     });
   }

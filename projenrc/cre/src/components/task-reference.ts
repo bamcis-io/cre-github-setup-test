@@ -22,20 +22,6 @@ export interface TaskRef {
   readonly notes?: string;
 }
 
-/** Setup never asks: a decision it doesn't make on its own is a switch (crelib.DECISIONS), refused (10) without it. */
-// A decision switch approves any subject alone (`--allow-production`), or only the one named
-// (`--allow-production=<account>`): what the refusal names, and what an answers file's `safety` lists.
-const ALLOW_PRODUCTION: readonly [string, string] = ['--allow-production',
-  'set up in a production account (Isengard IsProduction, or an account it can\'t classify); `=<account>` approves only that one. Refused (10) without it. Only after the user agrees'];
-const DECIDING: ReadonlyArray<readonly [string, string]> = [
-  ['--force', 'make every decision this task takes (the switches above), for any subject; only after the user agrees to each'],
-  ['--discovery', 'change nothing: print one `DECISION=<json>` line per decision the run needs (field, switch, what, change, and `approve`: the subject to pass as `<switch>=<approve>`), and one `CHECK=<json>` line per safety check, a change or not (`status`: change, in-place, create or not-needed), read from the accounts as they are now'],
-  ['--dry-run', 'print the plan, change nothing'],
-];
-const SETUP_PLAN_ONLY: ReadonlyArray<readonly [string, string]> = [
-  ['--dry-run', 'print the plan, change nothing'],
-];
-
 export const TASK_REFERENCE: Readonly<Record<string, TaskRef>> = {
   'branch': {
     usage: 'npx projen branch <type>/<description>',
@@ -129,98 +115,69 @@ export const TASK_REFERENCE: Readonly<Record<string, TaskRef>> = {
     notes: 'Reverse deploy order. Buckets, setup roles and retained resources stay; a stack in another account is skipped. Running it deletes (it doesn\'t ask): show the user `--dry-run` first, and run it only once they agree.',
   },
   'setup:aws': {
-    usage: 'npx projen setup:aws [--profile <p>] [--regions "<r1> <r2>"] [--runner-role <name>] [--exec-role <name>] [--allow-production[=<account>]] [--update-runner-trust-policy[=<role>@<account>]] [--force] [--discovery] [--dry-run]',
+    usage: 'npx projen setup:aws [--profile <p>] [--dns-profile <p>] [--allow-production <account>]...',
     switches: [
       ['--profile', 'the deploy account\'s AWS profile'],
-      ['--project', 'the project name (default: cre-setup.json)'],
-      ['--regions', 'the regions to make assets buckets in (default: cre-setup.json and every region in cre-stacks.json; the partition\'s control-plane region always, us-east-1 in `aws`)'],
-      ['--provider', 'gitlab or github (default: cre-setup.json)'],
-      ['--namespace', '(GitLab) the group path the runner role trusts (default: cre-setup.json)'],
-      ['--github-repo', '(GitHub) owner/repo the runner role trusts (default: cre-setup.json)'],
-      ['--runner-role', 'the CI runner role name (default GitLabRunner / CreGitHubDeploy)'],
-      ['--exec-role', 'the CloudFormation execution role name (default CreCfnExecution)'],
-      ['--move-account', 'set up an account other than cre-setup.json\'s accountId (refused without it), and record it. Delete the old account\'s assets buckets first: S3 names are global'],
-      ALLOW_PRODUCTION,
-      ['--update-runner-trust-policy', 'add this project to an existing runner role\'s trust policy, which other projects share (the diff is printed); `=<role>@<account>` approves only that role. Refused (10) without it. Only after the user agrees'],
-      ...DECIDING,
+      ['--dns-profile', 'the profile of the separate account the project\'s hosted zones are in: that account gets the stack CreSetupDns-<project> (the roles the DNS stack deploys and validates certificates with). Leave it out when the zone is in the deploy account'],
+      ['--allow-production', 'set up an account Isengard calls production, or can\'t classify (repeat for the DNS account). Refused (10) without it, before anything changes. Only after the user agrees'],
+      ['--project', 'set by the task (.projenrc.ts `name`); a second value is refused'],
+      ['--provider', 'set by the task (the project\'s provider); a second value is refused'],
+      ['--partition', 'set by the task (.projenrc.ts `partition`, default aws); a second value is refused'],
+      ['--namespace', '(GitLab) set by the task (the group in `repository`); a second value is refused'],
+      ['--github-repo', '(GitHub) set by the task (`<owner>/<repo>` from `repository`): the runner role trusts its OIDC subject, read from GitHub (gh\'s login); a second value is refused'],
+      ['--github-subject', '(GitHub) the OIDC subject prefix itself, instead of --github-repo (template setup); not with this task'],
+      ['--github-environment', '(GitHub) set by the task for a public repo (`AWS`): the runner role trusts that environment\'s jobs instead of main\'s; a second value is refused'],
     ],
-    script: ['setup/aws_account.py'],
-    notes: 'Assets buckets, the execution role, the CI runner role (idempotent). A runner role setup created keeps its `cre-runner` policy\'s grants and only gains this project\'s (shared by every project); put extra permissions in a policy of their own. Ask the user first.',
+    script: ['cresetup/account.py'],
+    notes: 'Deploys CreSetup-<project> (the runner role GitLabRunner-<project> or GitHubRunner-<project>, and the shared CreCfnExecution) in the partition\'s control-plane region with a change set; an unchanged stack is a no-op, so a re-run takes seconds. Prints ACCOUNT_ID, RUNNER_ROLE_ARN, CFN_EXECUTION_ROLE_ARN (and DNS_ACCOUNT_ID, DNS_ROLE_ARN, DNS_CFN_EXECUTION_ROLE_ARN): `setup:repo` puts them in the CI variables. No buckets: the deploy makes each region\'s. Exit 0 | 10 refused, nothing changed | 11 credentials or Midway | 20 a call failed (a re-run continues). Ask the user first.',
   },
   'setup:repo': {
-    usage: 'npx projen setup:repo prepare|finalize [--var KEY=VALUE[:protected][:masked]]... (GitLab) | [--var KEY=VALUE]... [--secret KEY=VALUE]... (GitHub) [--dir <d>] [--no-create | --recreate] [--adopt-existing-repo[=<repo>]] [--force] [--discovery] [--dry-run]',
+    usage: 'npx projen setup:repo [--deploy-var KEY=VALUE]... [--var KEY=VALUE]... (GitLab) | [--var KEY=VALUE]... [--secret KEY=VALUE]... (GitHub)',
     usageByProvider: {
-      gitlab: 'npx projen setup:repo prepare|finalize [--var KEY=VALUE[:protected][:masked]]... [--namespace <g>] [--project <p>] [--bindle <id>]',
-      github: 'npx projen setup:repo prepare|finalize [--var KEY=VALUE]... [--secret KEY=VALUE]... [--repo <owner/name>] [--app-slug <s>]',
+      gitlab: 'npx projen setup:repo [--deploy-var KEY=VALUE]... [--var KEY=VALUE]...',
+      github: 'npx projen setup:repo [--var KEY=VALUE]... [--secret KEY=VALUE]...',
     },
     switches: [
-      // One entry per provider, so each project's cre-tasks.md explains only its own form (review 10d F6).
-      ['--var', '(GitLab) a CI/CD variable: `KEY=VALUE[:protected][:masked]` (`:protected` for a role ARN, `:masked` for a secret). `KEY=@<file>` reads the value from a file, `KEY` alone from the environment; either takes the suffixes (`API_KEY=@key.txt:protected:masked`)'],
-      ['--var', '(GitHub) a repository variable (plain values; hidden ones are `--secret`). `KEY=@<file>` reads the value from a file, `KEY` alone from the environment'],
-      ['--secret', '(GitHub) an Actions secret (role ARNs, anything hidden); `KEY=@<file>` / `KEY` as for --var'],
-      ['--namespace', '(GitLab) the group path (default: cre-setup.json)'],
-      ['--project', '(GitLab) the project name (default: cre-setup.json)'],
-      ['--bindle', '(GitLab) the owning team bindle when `prepare` creates the project (default: $CRE_GITLAB_BINDLE, else the aws-cre bindle; not `.projenrc.ts`\'s bindleId, so pass it when re-creating a project)'],
-      ['--repo', '(GitHub) owner/repo (default: cre-setup.json)'],
-      ['--app-slug', '(GitHub) your automation App (default: cre-setup.json)'],
-      ['--app-id', '(GitHub) the App id (default: looked up from the slug)'],
-      ['--app-key-file', '(GitHub) the App\'s private key (default ~/.cre/<slug>.pem)'],
-      ['--wait-install', '(GitHub) wait up to N seconds for the App to be installed'],
-      ['--dir', 'the project directory (default: here): `finalize` pushes it; `prepare` reads its history to check the repo is this project\'s'],
-      ['--no-create', 'prepare: refuse (10) when the repo doesn\'t exist, instead of creating it. The default once this clone has pushed (new_project.py passes it too)'],
-      ['--recreate', 'prepare: create the repo even though this clone pushed to it before (it was deleted since). Without it prepare refuses (10) once the clone has pushed, so a retired project never comes back by a routine re-run. Ask the user first'],
-      ['--message', '`finalize`: the first commit\'s message'],
-      ['--adopt-existing-repo', '`prepare`: set up a repo whose history setup didn\'t make (work started before the template): it gets the CI variables and role trust. `=<group/project>` or `=<owner/repo>` for only that one. Refused (10) without it. Only after the user agrees. The adoption itself (the scaffold into its main, through an MR/PR) is `new_project.py`\'s (/cre-demo-init); `finalize` pushes only into an empty repo'],
-      ['--force', '`prepare`: make the decision above; only after the user agrees'],
-      ['--discovery', '`prepare`: change nothing; print a `DECISION=<json>` line when the repo has history to adopt (what it holds is the `change`)'],
-      ...SETUP_PLAN_ONLY,
+      // One entry per provider, so each project's cre-pipelines-detail.md explains only its own form (review 10d F6).
+      ['--deploy-var', '(GitLab) a variable only deploy jobs on main read: protected, scoped to the `AWS` environment. Every stack variable (a role ARN, `DOMAIN`, an API key) is one. `KEY=@<file>` reads the value from a file'],
+      ['--var', '(GitLab) a variable every job reads (not protected). No stack variable needs it: use `--deploy-var`. `KEY=@<file>` reads the value from a file'],
+      ['--var', '(GitHub) an Actions variable (shown in logs), in the `AWS` environment for a public repo. `KEY=@<file>` reads the value from a file'],
+      ['--secret', '(GitHub) an Actions secret (role ARNs, anything hidden), in the `AWS` environment for a public repo. `KEY=@<file>` as for --var'],
+      ['--project', '(GitLab) set by the task (the project in `repository`); a second value is refused'],
+      ['--namespace', '(GitLab) set by the task (the group in `repository`); a second value is refused'],
+      ['--token-file', '(GitLab) set by the task (the project\'s `.cre/gitlab-token` link to your token file); a second value is refused'],
+      ['--no-create', '(GitLab) set by the task: a missing project is refused (10), never created again'],
+      ['--bindle', '(GitLab) the owning bindle of a project setup creates: refused with --no-create, so never by this task'],
+      ['--repo', '(GitHub) set by the task (`<owner>/<repo>` from `repository`); a second value is refused'],
+      ['--environment', '(GitHub) set by the task for a public repo (`AWS`); a second value is refused'],
     ],
-    notes: 'prepare: create or adopt the repo, set variables. finalize: the first push into an empty repo (one with commits: 10), protect main, and on GitLab the weekly upgrade\'s token and schedule (13 with NEEDS=UPGRADE_TOKEN when GitLab refuses project access tokens; everything else is done). Ask the user first.',
-  },
-  'setup:dns': {
-    usage: 'npx projen setup:dns [--zone-id <Z...> | --supernova people --alias <a> | --supernova cre --zone-name <n>] [--domain <fqdn>] [--dns-profile <p>] [--allow-production[=<account>]] [--update-dns-role-trust-policy[=CreDnsDeploy@<account>]] [--force] [--discovery] [--dry-run]',
-    switches: [
-      ['--profile', 'the deploy account\'s profile'],
-      ['--dns-profile', 'the zone account\'s profile, when the zone is in another account'],
-      ['--project', 'the project (default: cre-setup.json)'],
-      ['--regions', 'regions that get certificate-validator trust (default: cre-setup.json)'],
-      ['--domain', 'the project\'s domain (default <project>.<zone>)'],
-      ['--zone-id', 'an existing hosted zone'],
-      ['--supernova', 'no zone yet: `people` or `cre`; creates the zone and the SuperNova role (exit 13 until delegation completes)'],
-      ['--alias', 'with `--supernova people`: your alias'],
-      ['--zone-name', 'with `--supernova cre`: the zone name'],
-      ['--runner-role', 'the CI runner role (default: the provider\'s)'],
-      ['--move-account', 'the deploy account isn\'t cre-setup.json\'s accountId on purpose (refused without it)'],
-      ['--provider', 'gitlab or github'],
-      ['--bindle', 'with `--supernova`: the bindle named in the SuperNova request text (default: cre-setup.json\'s bindleId, else $BINDLE_ID, else the aws-cre bindle)'],
-      ALLOW_PRODUCTION,
-      ['--update-dns-role-trust-policy', 'add this project\'s runner role to the existing CreDnsDeploy role\'s trust policy in the DNS account, which other projects share (the diff is printed); `=CreDnsDeploy@<account>` approves only that one. Refused (10) without it. Only after the user agrees'],
-      ...DECIDING,
-    ],
-    script: ['setup/dns.py'],
-    notes: 'Never deletes a hosted zone. Ask the user first.',
+    notes: 'Idempotent: re-applies the repo\'s settings (main\'s protection, merge settings; GitLab the weekly upgrade token and schedule; GitHub the App and, when public, the `AWS` environment) and writes only the variables that differ. A missing repo is refused, never created. A variable that feeds a `noEcho` stack parameter is stored hidden (masked on GitLab, a secret on GitHub) whichever switch set it, read from `cre-stacks.json` and `cdk.out/` (refused, 10, until `npx projen` has made them). GitLab refuses to mask some values (10, with its message). Exit 0 | 10 refused | 11 credentials or Midway | 20 a call failed (a re-run continues). Ask the user first.',
   },
   'setup:github-app': {
-    usage: 'npx projen setup:github-app [--alias <a>] [--key-dir <dir>] [--wait [<s>]] [--code <code-or-callback>] [--port <n>] [--dry-run]',
+    usage: 'npx projen setup:github-app [--alias <a>] [--key-dir <dir>] [--wait <s>]',
     switches: [
       ['--alias', 'your Amazon alias (default `whoami`); the App is aws-cre-automation-<alias>'],
       ['--key-dir', 'where its key lives (default ~/.cre)'],
-      ['--wait', 'wait for the browser step (seconds; no number: 90)'],
-      ['--code', 'over SSH: the callback address the browser failed to open'],
-      ['--port', 'the local callback server\'s port'],
-      ...SETUP_PLAN_ONLY,
+      ['--wait', 'seconds to wait for the "Create GitHub App" click (default 600; 0 opens nothing and doesn\'t wait)'],
     ],
-    script: ['setup/github_app.py'],
-    notes: 'Exit 13 with NEEDS=APP_CREATE: a browser click, then re-run.',
+    script: ['cresetup/github_app.py'],
+    notes: 'One App per builder, for all their repos: it exists and is yours, its key is one of its keys, and it has Contents, Pull requests and Workflows write; otherwise GitHub\'s manifest flow makes it (one browser click). Exit 0 ready | 10 refused (another owner\'s App by that name, no or wrong key, missing permissions, or not created yet: the page\'s address is printed) | 11 gh isn\'t signed in | 20 a call failed.',
   },
   'setup:github-public': {
-    usage: 'npx projen setup:github-public [--dry-run] [--repo <owner/name>] [--dir <path>]',
+    usage: 'npx projen setup:github-public --profile <p> [--dns-profile <p>] [--allow-production <account>]... [--dry-run]',
     switches: [
-      ['--dry-run', 'scan the history and print what becomes readable, change nothing'],
-      ['--repo', 'owner/repo (default: cre-setup.json)'],
-      ['--dir', 'the project directory (default: here)'],
+      ['--profile', 'the deploy account\'s AWS profile (the runner role\'s trust moves to the `AWS` environment)'],
+      ['--dns-profile', 'the hosted zone account\'s profile, when the project has one: its stack\'s trust moves too'],
+      ['--allow-production', 'an account Isengard calls production, or can\'t classify, as for setup:aws. Only after the user agrees'],
+      ['--dry-run', 'scan the history and say what becomes readable; change nothing'],
+      ['--dir', 'the project\'s clone (default: here)'],
+      ['--repo', 'set by the task (`<owner>/<repo>` from `repository`); a second value is refused'],
+      ['--project', 'set by the task (.projenrc.ts `name`); a second value is refused'],
+      ['--app-slug', 'set by the task (`github.appSlug`): the App approves and merges the switch\'s PR; a second value is refused'],
+      ['--partition', 'set by the task (.projenrc.ts `partition`, default aws); a second value is refused'],
     ],
-    notes: 'Makes the repo public: running it is the decision, so it doesn\'t ask. Only when the user asks (show them the `--dry-run` first). Re-running carries on where it stopped. Other repo_github.py switches are refused here (exit 10).',
+    script: ['cresetup/github_public.py'],
+    notes: 'From main with nothing uncommitted. Makes the repo public: running it is the decision, so it doesn\'t ask. Only when the user asks (show them `--dry-run` first). Refused (10) when the history holds something shaped like a credential. Between moving the trust and merging its PR, main\'s old workflow can\'t deploy. Repo-level variables and secrets it didn\'t set are named: set each again with setup:repo. Re-running carries on where it stopped (.git/cre-github-public.json). Exit 0 | 10 refused | 11 credentials | 20 a call failed.',
   },
   'cfs:curl': {
     usage: 'npx projen cfs:curl [--json] [-i] <GET|POST|PUT|PATCH|DELETE|HEAD> <url-or-/path> [body]',
@@ -270,7 +227,7 @@ const CI_STEP = /^(deploy:(upload|s3|stack|prune|docker)|ci:build:.*|build:(cont
  * the on-demand `cre-pipelines-detail.md`, not the always-on `cre-tasks.md`, which names them with a
  * pointer (review 10f decision 5: about 1.1k tokens in every session otherwise).
  */
-export const SETUP_TASKS: readonly string[] = ['setup:aws', 'setup:dns', 'setup:repo'];
+export const SETUP_TASKS: readonly string[] = ['setup:aws', 'setup:repo'];
 
 /** One task's entry: heading, usage, description, this provider's switches, notes. */
 function entryLines(t: { name: string; description?: string }, provider: 'gitlab' | 'github'): string[] {

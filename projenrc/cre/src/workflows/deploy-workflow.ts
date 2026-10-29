@@ -59,7 +59,7 @@ export interface DeployWorkflowOptions {
   readonly pruneAssets?: boolean;
   /**
    * How long the deploy jobs' AWS credentials last, when the runner role allows more than the 1 h
-   * default (cre-setup.json `runnerSessionSeconds`, recorded by setup). @default 1 h (the action's)
+   * default (GITHUB_ROLE_SECONDS: setup's runner role allows 2 h). @default 1 h (the action's)
    */
   readonly roleDurationSeconds?: number;
   /**
@@ -172,8 +172,6 @@ function addDeployJobs(workflow: GithubWorkflow, opts: DeployWorkflowOptions, se
         PROJECT_NAME: opts.projectName,
         // One prefix for every job of the run (and a re-run of one), as GitLab's CI_PIPELINE_ID.
         ASSETS_PREFIX: `${opts.projectName}/\${{ github.run_id }}/`,
-        // A repository variable, so bucket names aren't masked in the logs (N10); a secret in older repos.
-        ASSETS_BUCKET_PREFIX: '${{ vars.ASSETS_BUCKET_PREFIX || secrets.ASSETS_BUCKET_PREFIX }}',
       },
       steps,
     });
@@ -191,7 +189,13 @@ function addDeployJobs(workflow: GithubWorkflow, opts: DeployWorkflowOptions, se
     { name: 'Download content artifact', uses: ACTIONS.downloadArtifact, with: { name: CONTENT_ARTIFACT, path: 'dist' } },
     credentials(opts.awsRegion),
     ...craneSteps,
-    { name: 'Publish templates, assets and images', run: 'npx projen deploy:upload' },
+    {
+      name: 'Publish templates, assets and images',
+      run: 'npx projen deploy:upload',
+      // The first upload to a region makes its bucket stack, as CloudFormation's execution role; with a
+      // DNS account, its deploy role may read the templates (scripts/build/assets.py).
+      env: Object.fromEntries(['CFN_EXECUTION_ROLE_ARN', 'DNS_ROLE_ARN'].map((n) => [n, render({ kind: 'var', name: n, optional: true }, GITHUB)])),
+    },
   ]);
 
   const outputsArtifact = (j: StackJob) => `stack-outputs-${j.githubJob}`;

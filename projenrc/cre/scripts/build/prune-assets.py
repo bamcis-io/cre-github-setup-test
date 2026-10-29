@@ -4,8 +4,8 @@ before it. Runs as the last deploy phase, only after every stack deployed.
 
   PROJECT_NAME   prefixes live under s3://<bucket>/<PROJECT_NAME>/
   ASSETS_PREFIX  this deploy's prefix (always kept)
-  PRUNE_BUCKETS  space-separated `<region>=<bucket>` pairs (one per region); a bare bucket name is
-                 called without --region (the CLI finds the bucket's region)
+  PRUNE_REGIONS  space-separated regions; each one's bucket is named from PROJECT_NAME and the
+                 account the credentials are for (assets.py)
   PRUNE_KEEP     previous prefixes to keep besides the current one (default 2)
 
 A prefix is a deploy prefix only if its name is a run id (`<project>/<digits>/`: GitLab's pipeline
@@ -27,6 +27,9 @@ import sys
 sys.dont_write_bytecode = True  # never a __pycache__ in the template clone or projenrc/cre
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "setup"))
 import crelib  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import assets  # noqa: E402
 
 
 
@@ -63,13 +66,17 @@ def main():
         warn(f"PRUNE_KEEP={os.environ['PRUNE_KEEP']!r} is not a number; using 2")
         keep = 2
     current = prefix.rstrip("/") + "/"
-    for entry in (os.environ.get("PRUNE_BUCKETS") or "").split():
+    regions = (os.environ.get("PRUNE_REGIONS") or "").split()
+    try:
+        account = assets.account() if regions else ""
+    except assets.Fail as e:
+        warn(f"{e}; nothing pruned")
+        return 0
+    for name in regions:
         # Call S3 in the bucket's region (no redirect, and a scoped policy needn't allow the CLI's
-        # region lookup; review N5). The task passes the region; it is never parsed from the name.
-        name, sep, bucket = entry.partition("=")
-        if not sep:
-            name, bucket = "", entry
-        region = ["--region", name] if name else []
+        # region lookup; review N5).
+        bucket = assets.bucket_name(project, account, name)
+        region = ["--region", name]
         r = crelib.run(["aws", "s3api", "list-objects-v2", *region, "--bucket", bucket, "--prefix", f"{project}/",
                         "--query", "Contents[].[Key,LastModified]", "--output", "text"])
         if r.returncode != 0:

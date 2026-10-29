@@ -20,6 +20,7 @@ Exit 0 done | 10 refused (not a template clone, not a project directory) | 20 a 
 """
 import json
 import os
+import subprocess
 import sys
 from urllib.parse import urlsplit, urlunsplit
 
@@ -114,11 +115,18 @@ def skills(step, tpl, proj, pkg):
             step.die(c.FAILED, f"Linking .claude/skills failed: {e}")
 
 
+def on_gitlab(proj):
+    """The project's origin is a GitLab repo (as the git tasks' cregit.provider_name derives it)."""
+    r = subprocess.run(["git", "-C", proj, "remote", "get-url", "origin"], capture_output=True, text=True)
+    url = r.stdout.strip() if r.returncode == 0 else ""
+    return "gitlab" in url and "github.com" not in url
+
+
 def token_link(step, tpl, proj):
     """The template records where this machine's GitLab token file is (.agents/gitlab-token, a link
-    made by new_project.py); a GitLab project gets the same link at .cre/gitlab-token. Only the path
-    is shared; the token is never copied. A real file at .cre/gitlab-token is left alone."""
-    if read_json(os.path.join(proj, "cre-setup.json")).get("provider") != "gitlab":
+    made by new_project.py); a GitLab project (its origin) gets the same link at .cre/gitlab-token.
+    Only the path is shared; the token is never copied. A real file at .cre/gitlab-token is left alone."""
+    if not on_gitlab(proj):
         return
     rec = os.environ.get("CRE_TOKEN_RECORD") or os.path.join(tpl, c.TEMPLATE_TOKEN_LINK)
     lnk = os.path.join(proj, c.PROJECT_TOKEN_LINK)

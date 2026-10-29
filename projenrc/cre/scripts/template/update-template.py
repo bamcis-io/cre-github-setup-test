@@ -116,7 +116,7 @@ def run_helper(step, pkg, script, *args):
 
 def refresh_agents(frm, old_sha, root):
     """AGENTS.md / CLAUDE.md: the skeleton's, refreshed where the project kept them as scaffolded."""
-    name = jget(os.path.join(root, "cre-setup.json"), "project") or jget(os.path.join(root, "package.json"), "name")
+    name = jget(os.path.join(root, "package.json"), "name")   # projen writes it from .projenrc.ts's name
     fill = lambda t: t.replace("__DEMO_NAME__", name)  # noqa: E731
     for f in ("AGENTS.md", "CLAUDE.md"):
         src = os.path.join(frm, "skeleton", "_shared", f)
@@ -221,7 +221,7 @@ def main(step, argv):
     # What was already changed before the update: the restore command puts back only what the
     # update itself changed (review 10b C21).
     before_tracked, before_new = set(porcelain_paths(False)), set(porcelain_paths(True))
-    for d in ("src", "scripts", "steering"):
+    for d in ("src", "scripts", "steering", "setup-cdk"):   # scaffold.py PACKAGE_DIRS
         try:
             c.mirror(os.path.join(pkg, d), os.path.join(DEST, d), skip_ignored=True)
             if d == "scripts":

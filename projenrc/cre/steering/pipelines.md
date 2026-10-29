@@ -134,17 +134,17 @@ const host = `ssm.${Aws.REGION}.${Aws.URL_SUFFIX}`;
 Every change is an MR/PR from `npx projen push`, and it deploys when it merges: the merge to `main`
 runs the deploy jobs, one per stack, in dependency order. A branch never deploys. Never push to
 `main`, merge by hand or arm auto-merge yourself. On GitHub, how the PR merges depends on
-`cre-setup.json`'s `githubVisibility` (private: the build workflow merges it after its build passes;
-public: GitHub auto-merge behind `main`'s protection). A redeploy without a change is
+`github.visibility` in `.projenrc.ts` (private, the default: the build workflow merges it after its
+build passes; public: GitHub auto-merge behind `main`'s protection, and the deploy jobs run in the
+`AWS` environment). Setup writes it; only `npx projen setup:github-public` changes it, with the repo. A redeploy without a change is
 `npx projen ci:rerun --all`, only when the user asks (the `cre-git` skill).
 
-A stack in a new region, or a new `fromVariable`, needs setup first (that region's bucket, that
-CI/CD variable). The build's `check:deploy-prereqs` fails until it is done and prints the
-`npx projen setup:aws` / `setup:repo prepare …` command in the provider's syntax. In a project
-whose `cre-setup.json` doesn't record `ciVariables`, it only warns, naming each variable it
-couldn't check: ask the user whether each is set. Both need AWS
-credentials or the provider's login and change the repo: ask the user, who also has the value, then
-commit the updated `cre-setup.json`.
+A new `fromVariable` (or role variable) needs that CI/CD variable set before the change merges:
+`npx projen setup:repo …` (the switch for each kind of value: `cre-pipelines-detail.md`).
+Nothing in the build checks it: a CI job can't list the project's variables. An unset one stops
+the deploy after the merge, before it touches CloudFormation; set it, then `npx projen ci:rerun`.
+It needs the provider's login and the value: ask the user. A stack in a new region needs nothing:
+the deploy makes that region's assets bucket.
 
 A removed or renamed stack stays deployed: once the change is merged and deployed,
 `npx projen stacks` lists such orphans, and `npx projen teardown --orphans` deletes them (show the user
@@ -153,6 +153,6 @@ old stack.
 
 ## Before pushing
 
-`npx projen build` regenerates the plan and CI, synthesizes every stack, runs `check:stack-wiring`,
-`check:stack-plan` and `check:deploy-prereqs`, then the tests; it must pass, and `cre-stacks.json` and the CI files must be
+`npx projen build` regenerates the plan and CI, synthesizes every stack, runs `check:stack-wiring` and
+`check:stack-plan`, then the tests; it must pass, and `cre-stacks.json` and the CI files must be
 committed with the code.

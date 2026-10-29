@@ -1,7 +1,7 @@
 ---
 inclusion: auto
 name: cre-pipelines-detail
-description: Stack placement by region and partition, the deploy variables on GitLab and GitHub (names, protected and masked values, reserved names), the generated deploy jobs, npx projen deploy run locally, and the setup tasks (setup:aws, setup:dns, setup:repo) with their switches. Read when a stack must go in a specific region, when adding or debugging a deploy variable or role, when a deploy job fails, or before running a setup task.
+description: Stack placement by region and partition, the deploy variables on GitLab and GitHub (names, protected and masked values, reserved names), the generated deploy jobs, npx projen deploy run locally, and the setup tasks (setup:aws, setup:repo) with their switches. Read when a stack must go in a specific region, when adding or debugging a deploy variable or role, when a deploy job fails, or before running a setup task.
 ---
 # CI/CD in detail: placement, variables, deploy jobs
 
@@ -32,8 +32,9 @@ deploy time. A CloudFront distribution can't use a VPC origin in another partiti
 Every variable the deploy reads is named by a stack (`fromVariable` parameters and roles, plus
 `CFN_EXECUTION_ROLE_ARN` when a stack uses the default execution role). `cre-stacks.json` lists them
 under `environment` (`required`, `optional`, and `defaulted`: those the deploy has a value for when
-unset, `BINDLE_ID`); the deploy also always needs `ASSETS_BUCKET_PREFIX`, and fails fast on an
-empty required variable.
+unset, `BINDLE_ID`), and fails fast on an empty required variable. The assets buckets need none: each
+region's is named from the project, the account and the region (`<name>-<account>-<region>-an`), and
+the deploy's upload makes it, as a `<project>-cre-assets` stack, the first time a stack goes there.
 
 - **The same names on both providers.** The pipeline's own deploy role is `AWS_CREDS_TARGET_ROLE`
   everywhere (GitLab's credential vendor assumes it; on GitHub the OIDC credentials step does), and
@@ -50,7 +51,7 @@ empty required variable.
   `STACK_*` (the names outputs travel under).
 - **GitHub:** each stack job's `env` is generated with the variables that stack uses, each read as
   `vars.X || secrets.X`: a repository variable for a plain value (shown in logs), a secret for a
-  role ARN or anything hidden. Set them with `setup:repo prepare --var X=…` / `--secret X=…`; don't
+  role ARN or anything hidden. Set them with `setup:repo --var X=…` / `--secret X=…`; don't
   edit the workflow.
 
 ## The deploy jobs
@@ -63,7 +64,7 @@ output, naming it: give the output another value (encode it, or pass the parts s
   `dependsOn`), otherwise in the order the app creates them. Stacks that need nothing from each
   other deploy in parallel in CI. A cycle fails `npx projen`.
 - **Every stack job has the same variables, built into the pipeline**, and `deploy:stack`
-  resolves nothing: `STACK_NAME`, `TEMPLATE_NAME`, `AWS_REGION`, `AWS_DEFAULT_REGION`,
+  resolves nothing: `STACK_NAME`, `TEMPLATE_NAME`, `AWS_REGION`,
   `ASSETS_BUCKET`, `OUTPUTS_PREFIX`, `OUTPUTS`, `ROLE_ARN`, `ASSUME_ROLE`, `STACK_PARAMETERS`,
   `REQUIRED_VARS`, `REQUIRED_OUTPUTS`. `STACK_PARAMETERS` references the deploy variables and the
   earlier stacks' outputs directly. `cre-stacks.json` records every job's needs and variables.
@@ -75,7 +76,7 @@ output, naming it: give the output another value (encode it, or pass the parts s
   stops it, naming the variable, or the stack and output.
 - **Roles:** every job runs as `AWS_CREDS_TARGET_ROLE`. A stack with an `assumeRole` assumes it
   from those credentials first (role chaining), so the other account's role trusts the runner role,
-  which `setup:dns` sets up.
+  which `setup:aws --dns-profile <p>` sets up.
 - **Serialised, never cancelled mid-CloudFormation.** GitLab: each stack job is serialised across
   pipelines (`resource_group`), so the stacks of one pipeline still deploy in parallel. GitHub: one
   deploy run at a time (one workflow `concurrency` group); a run still waiting when a newer merge
@@ -91,19 +92,25 @@ deployed stacks. The identity differs from CI's (yours, not the runner role's): 
 `assumeRole` trusts only the runner role (a cross-account `CreDnsStack`) is refused before anything
 deploys; let CI deploy it.
 
-**A DNS zone added after the scaffold.** `npx projen setup:dns` makes the zone's roles and records
-the zone in `cre-setup.json`, but sets no CI/CD variables: it prints the one `setup:repo prepare`
-command for `DOMAIN`, `HOSTED_ZONE_ID` and, for a zone in another account, `DNS_ROLE_ARN` and
-`DNS_CFN_EXECUTION_ROLE_ARN`. Run it with the user's agreement. Until then the build fails for a
+**A DNS zone added after the scaffold.** The zone itself is the user's (an existing public hosted
+zone). In the deploy account nothing needs setting up. In another account, `npx projen setup:aws
+--dns-profile <that account's profile>` deploys the stack `CreSetupDns-<project>` there and prints
+`DNS_ROLE_ARN` and `DNS_CFN_EXECUTION_ROLE_ARN`. Neither sets CI/CD variables: set `DOMAIN`,
+`HOSTED_ZONE_ID` and, for a zone in another account, those two role ARNs with `setup:repo`.
+Run them with the user's agreement. Until then the build fails for a
 zone in another account (the roles are optional in the plan, but without them the DNS stack would
 deploy into this account).
 
-The `setup:repo prepare` switch `check:deploy-prereqs` prints, by kind of value:
+The `setup:repo` switch for each kind of value:
 
 | | Plain value | Role ARN | `noEcho` parameter's value |
 |---|---|---|---|
-| GitLab | `--var X=v` | `--var X=arn:…:protected` | `--var X=@<file holding it>:protected:masked` |
-| GitHub | `--var X=v` (repository variable) | `--secret X=arn:…` | `--secret X=@<file holding it>` |
+| GitLab | `--deploy-var X=v` | `--deploy-var X=arn:…` | `--deploy-var X=@<file holding it>` |
+| GitHub | `--var X=v` (Actions variable) | `--secret X=arn:…` | `--secret X=@<file holding it>` |
+
+A variable that feeds a `noEcho` parameter is stored hidden (masked on GitLab, a secret on GitHub)
+whichever switch sets it: `setup:repo` reads which ones from `cre-stacks.json` and `cdk.out/`, and
+refuses (10) until `npx projen` has made them.
 
 A `noEcho` value is read from the file (`@<file>`, one trailing newline dropped) so it is never on
 the command line, in `ps` or in the shell history. Write it to a file the user chooses, and delete
