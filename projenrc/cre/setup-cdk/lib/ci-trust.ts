@@ -18,6 +18,13 @@ export interface CiTrustProps {
    * deployment branch policy). @default main's subject
    */
   readonly githubEnvironment?: string;
+  /**
+   * GitHub, with githubEnvironment: trust main's subject as well, while a repo switches to the
+   * environment (setup:github-public). main's old workflow, which declares no environment, keeps
+   * deploying until the switch's PR has merged and its runs have finished; then setup narrows the
+   * trust to the environment alone. @default false
+   */
+  readonly githubAlsoTrustMain?: boolean;
 }
 
 /**
@@ -41,12 +48,15 @@ export function ciPrincipal(shared: SharedResources | undefined, props: CiTrustP
   }
   if (!props.githubSubject?.startsWith('repo:')) throw new Error('GitHub needs the OIDC subject prefix (githubSubject, repo:<owner>/<repo>)');
   if (!shared) throw new Error('GitHub CI trust needs the account\'s shared resources (its OIDC provider)');
+  if (props.githubAlsoTrustMain && !props.githubEnvironment) throw new Error('githubAlsoTrustMain needs githubEnvironment');
+  const main = `${props.githubSubject}:ref:refs/heads/main`;
+  const subjects = props.githubEnvironment
+    ? [`${props.githubSubject}:environment:${props.githubEnvironment}`, ...(props.githubAlsoTrustMain ? [main] : [])]
+    : [main];
   return new iam.WebIdentityPrincipal(shared.oidcProvider(), {
     StringEquals: {
       [`${names.GITHUB_OIDC_HOST}:aud`]: 'sts.amazonaws.com',
-      [`${names.GITHUB_OIDC_HOST}:sub`]: props.githubEnvironment
-        ? `${props.githubSubject}:environment:${props.githubEnvironment}`
-        : `${props.githubSubject}:ref:refs/heads/main`,
+      [`${names.GITHUB_OIDC_HOST}:sub`]: subjects.length === 1 ? subjects[0] : subjects,
     },
   });
 }

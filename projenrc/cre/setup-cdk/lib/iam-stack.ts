@@ -18,6 +18,8 @@ export interface IamStackProps extends cdk.StackProps {
   readonly githubSubject?: string;
   /** GitHub: the deploy jobs' environment (ci-trust.ts). */
   readonly githubEnvironment?: string;
+  /** GitHub: main's subject too, while the repo switches to the environment (ci-trust.ts). */
+  readonly githubAlsoTrustMain?: boolean;
 }
 
 /**

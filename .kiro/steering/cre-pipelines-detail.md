@@ -135,6 +135,7 @@ The CI runner role and the CloudFormation execution role in the deploy account, 
 - `--partition`: set by the task (.projenrc.ts `partition`, default aws); a second value is refused
 - `--github-repo`: (GitHub) set by the task (`<owner>/<repo>` from `repository`): the runner role trusts its OIDC subject, read from GitHub (gh's login); a second value is refused
 - `--github-subject`: (GitHub) the OIDC subject prefix itself, instead of --github-repo (template setup); not with this task
+- `--github-also-trust-main`: (GitHub) with --github-environment, main's subject too: only while setup:github-public switches the repo (it narrows the trust again)
 - `--github-environment`: (GitHub) set by the task for a public repo (`AWS`): the runner role trusts that environment's jobs instead of main's; a second value is refused
 
 Deploys CreSetup-<project> (the runner role GitLabRunner-<project> or GitHubRunner-<project>, and the shared CreCfnExecution) in the partition's control-plane region with a change set; an unchanged stack is a no-op, so a re-run takes seconds. Prints ACCOUNT_ID, RUNNER_ROLE_ARN, CFN_EXECUTION_ROLE_ARN (and DNS_ACCOUNT_ID, DNS_ROLE_ARN, DNS_CFN_EXECUTION_ROLE_ARN): `setup:repo` puts them in the CI variables. No buckets: the deploy makes each region's. Exit 0 | 10 refused, nothing changed | 11 credentials or Midway | 20 a call failed (a re-run continues). Ask the user first.
